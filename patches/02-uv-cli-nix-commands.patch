@@ -1,0 +1,77 @@
+diff --git a/crates/uv-cli/src/lib.rs b/crates/uv-cli/src/lib.rs
+index e2a7281d6..8e3b0f4f9 100644
+--- a/crates/uv-cli/src/lib.rs
++++ b/crates/uv-cli/src/lib.rs
+@@ -532,6 +532,12 @@ pub enum Commands {
+         #[command(subcommand)]
+         command: BuildBackendCommand,
+     },
++    /// Nix integration commands.
++    #[command(
++        after_help = "Use `uv help nix` for more details.",
++        after_long_help = ""
++    )]
++    Nix(NixNamespace),
+     /// Manage uv's cache.
+     #[command(
+         after_help = "Use `uv help cache` for more details.",
+@@ -856,6 +862,59 @@ pub struct SelfUpdateArgs {
+     pub dry_run: bool,
+ }
+ 
++#[derive(Args)]
++pub struct NixNamespace {
++    #[command(subcommand)]
++    pub command: NixCommand,
++}
++
++#[derive(Subcommand)]
++pub enum NixCommand {
++    /// Print a hello message (proof of concept).
++    Hello(NixHelloArgs),
++    /// Patch ELF binaries in a virtual environment for NixOS compatibility.
++    PatchEnv(NixPatchEnvArgs),
++    /// Patch a managed Python installation for NixOS compatibility.
++    PatchPython(NixPatchPythonArgs),
++}
++
++#[derive(Args)]
++pub struct NixHelloArgs {
++    /// An optional name to greet.
++    #[arg(long)]
++    pub name: Option<String>,
++}
++
++#[derive(Args)]
++pub struct NixPatchEnvArgs {
++    /// Path to the virtual environment to patch.
++    pub path: PathBuf,
++    /// Path to the patchelf binary.
++    #[arg(long)]
++    pub patchelf: Option<PathBuf>,
++    /// Dynamic linker interpreter path.
++    #[arg(long)]
++    pub interpreter: Option<PathBuf>,
++    /// RPATH entries (colon-separated).
++    #[arg(long)]
++    pub rpath: Option<String>,
++}
++
++#[derive(Args)]
++pub struct NixPatchPythonArgs {
++    /// Path to the Python installation directory.
++    pub path: PathBuf,
++    /// Path to the patchelf binary.
++    #[arg(long)]
++    pub patchelf: Option<PathBuf>,
++    /// Dynamic linker interpreter path.
++    #[arg(long)]
++    pub interpreter: Option<PathBuf>,
++    /// RPATH entries (colon-separated).
++    #[arg(long)]
++    pub rpath: Option<String>,
++}
++
+ #[derive(Args)]
+ pub struct CacheNamespace {
+     #[command(subcommand)]

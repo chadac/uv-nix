@@ -1,6 +1,16 @@
 [package]
 name = "uv-nix"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 
 [dependencies]
+anyhow = { version = "1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+sha2 = { version = "0.10" }
+toml = { version = "0.8" }
+tracing = { version = "0.1" }
+walkdir = { version = "2" }
+
+[dev-dependencies]
+tempfile = { version = "3" }

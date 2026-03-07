@@ -10,5 +10,7 @@ devenv.local.nix
 
 
 # Added by cargo
-
 /target
+
+# Nix build output
+/result

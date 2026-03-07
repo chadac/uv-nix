@@ -1,0 +1,26 @@
+diff --git a/crates/uv-python/Cargo.toml b/crates/uv-python/Cargo.toml
+index 759375103..f27768ad9 100644
+--- a/crates/uv-python/Cargo.toml
++++ b/crates/uv-python/Cargo.toml
+@@ -36,6 +36,7 @@ uv-redacted = { workspace = true }
+ uv-state = { workspace = true }
+ uv-static = { workspace = true }
+ uv-trampoline-builder = { workspace = true }
++uv-nix = { workspace = true }
+ uv-warnings = { workspace = true }
+ 
+ anyhow = { workspace = true }
+diff --git a/crates/uv-python/src/installation.rs b/crates/uv-python/src/installation.rs
+index adbcbd326..68a8ef2a0 100644
+--- a/crates/uv-python/src/installation.rs
++++ b/crates/uv-python/src/installation.rs
+@@ -326,6 +326,9 @@ impl PythonInstallation {
+             e.warn_user(&installed);
+         }
+ 
++        // Patch ELF binaries and install ctypes hook for NixOS compatibility.
++        uv_nix::post_python_install_patch(installed.path());
++
+         Ok(Self {
+             source: PythonSource::Managed,
+             interpreter: Interpreter::query(installed.executable(false), cache)?,

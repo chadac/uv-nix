@@ -1,0 +1,96 @@
+diff --git a/crates/uv/Cargo.toml b/crates/uv/Cargo.toml
+index 6d59f258d..58ae70759 100644
+--- a/crates/uv/Cargo.toml
++++ b/crates/uv/Cargo.toml
+@@ -38,6 +38,7 @@ uv-git-types = { workspace = true }
+ uv-install-wheel = { workspace = true, default-features = false }
+ uv-installer = { workspace = true }
+ uv-logging = { workspace = true }
++uv-nix = { workspace = true }
+ uv-normalize = { workspace = true }
+ uv-pep440 = { workspace = true }
+ uv-pep508 = { workspace = true }
+diff --git a/crates/uv/src/commands/pip/operations.rs b/crates/uv/src/commands/pip/operations.rs
+index cbe1da090..3ab300138 100644
+--- a/crates/uv/src/commands/pip/operations.rs
++++ b/crates/uv/src/commands/pip/operations.rs
+@@ -850,6 +850,11 @@ async fn execute_plan(
+             // task.
+             .install_blocking(installs)?;
+ 
++        // Patch ELF binaries for NixOS compatibility.
++        for site_packages_dir in venv.site_packages() {
++            uv_nix::post_install_patch(&site_packages_dir);
++        }
++
+         logger.on_install(installs.len(), start, printer, DryRun::Disabled)?;
+     }
+ 
+diff --git a/crates/uv/src/commands/python/install.rs b/crates/uv/src/commands/python/install.rs
+index 8297bcfb9..8c7120994 100644
+--- a/crates/uv/src/commands/python/install.rs
++++ b/crates/uv/src/commands/python/install.rs
+@@ -673,6 +673,8 @@ async fn perform_install(
+         if let Err(e) = installation.ensure_dylib_patched() {
+             e.warn_user(installation);
+         }
++        // Patch ELF binaries for NixOS compatibility.
++        uv_nix::post_python_install_patch(installation.path());
+ 
+         let upgradeable = (default || is_default_install)
+             || requested_minor_versions.contains(&installation.key().version().python_version());
+diff --git a/crates/uv/src/lib.rs b/crates/uv/src/lib.rs
+index a60ee0d81..678d44377 100644
+--- a/crates/uv/src/lib.rs
++++ b/crates/uv/src/lib.rs
+@@ -29,9 +29,10 @@ use uv_cache_info::Timestamp;
+ use uv_cli::SelfUpdateArgs;
+ use uv_cli::{
+     AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
+-    CacheNamespace, Cli, Commands, PipCommand, PipNamespace, ProjectCommand, PythonCommand,
+-    PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace, TopLevelArgs,
+-    WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
++    CacheNamespace, Cli, Commands, NixCommand, NixNamespace, NixPatchEnvArgs, NixPatchPythonArgs,
++    PipCommand, PipNamespace, ProjectCommand, PythonCommand, PythonNamespace, SelfCommand,
++    SelfNamespace, ToolCommand, ToolNamespace, TopLevelArgs, WorkspaceCommand, WorkspaceNamespace,
++    compat::CompatArgs,
+ };
+ use uv_client::BaseClientBuilder;
+ use uv_configuration::min_stack_size;
+@@ -1282,6 +1283,36 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
+             ))
+             .await
+         }
++        Commands::Nix(NixNamespace {
++            command: NixCommand::Hello(args),
++        }) => {
++            uv_nix::nix_hello(args.name)?;
++            Ok(ExitStatus::Success)
++        }
++        Commands::Nix(NixNamespace {
++            command:
++                NixCommand::PatchEnv(NixPatchEnvArgs {
++                    path,
++                    patchelf,
++                    interpreter,
++                    rpath,
++                }),
++        }) => {
++            uv_nix::patch_env(&path, patchelf, interpreter, rpath)?;
++            Ok(ExitStatus::Success)
++        }
++        Commands::Nix(NixNamespace {
++            command:
++                NixCommand::PatchPython(NixPatchPythonArgs {
++                    path,
++                    patchelf,
++                    interpreter,
++                    rpath,
++                }),
++        }) => {
++            uv_nix::patch_python(&path, patchelf, interpreter, rpath)?;
++            Ok(ExitStatus::Success)
++        }
+         #[cfg(feature = "self-update")]
+         Commands::Self_(SelfNamespace {
+             command:

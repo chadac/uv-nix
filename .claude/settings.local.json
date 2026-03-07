@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(devenv shell:*)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl:*)",
+      "WebFetch(domain:docs.astral.sh)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:deepwiki.com)",
+      "WebFetch(domain:crane.dev)",
+      "WebFetch(domain:devenv.sh)",
+      "WebFetch(domain:drakerossman.com)",
+      "Bash(git ls-remote:*)",
+      "Bash(git submodule:*)",
+      "Bash(git checkout:*)",
+      "Bash(chmod +x:*)",
+      "Bash(/home/chadac/code/github.com/chadac/uv-nix/scripts/apply-patches.sh:*)",
+      "Bash(cargo build:*)",
+      "Bash(nix flake:*)",
+      "Bash(./uv/target/debug/uv nix:*)",
+      "Bash(./uv/target/debug/uv:*)",
+      "Bash(nix build:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

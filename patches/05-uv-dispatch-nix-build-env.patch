@@ -1,0 +1,30 @@
+diff --git a/crates/uv-dispatch/Cargo.toml b/crates/uv-dispatch/Cargo.toml
+index 5bb1024b4..fd72217fa 100644
+--- a/crates/uv-dispatch/Cargo.toml
++++ b/crates/uv-dispatch/Cargo.toml
+@@ -27,6 +27,7 @@ uv-distribution-types = { workspace = true }
+ uv-git = { workspace = true }
+ uv-install-wheel = { workspace = true }
+ uv-installer = { workspace = true }
++uv-nix = { workspace = true }
+ uv-platform-tags = { workspace = true }
+ uv-preview = { workspace = true }
+ uv-pypi-types = { workspace = true }
+diff --git a/crates/uv-dispatch/src/lib.rs b/crates/uv-dispatch/src/lib.rs
+index 365b33439..570bd83e8 100644
+--- a/crates/uv-dispatch/src/lib.rs
++++ b/crates/uv-dispatch/src/lib.rs
+@@ -467,6 +467,13 @@ impl BuildContext for BuildDispatch<'_> {
+ 
+         // Get package-specific environment variables if available.
+         let mut environment_variables = self.build_extra_env_vars.clone();
++
++        // Inject Nix build environment (headers, libraries, pkg-config) for NixOS.
++        let nix_build_vars = uv_nix::build_env::get_nix_build_env();
++        for (key, value) in nix_build_vars {
++            environment_variables.entry(key).or_insert(value);
++        }
++
+         if let Some(name) = dist_name {
+             if let Some(package_vars) = self.extra_build_variables.get(name) {
+                 environment_variables.extend(

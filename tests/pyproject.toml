@@ -1,0 +1,22 @@
+[project]
+name = "uv-nix-tests"
+version = "0.0.1"
+description = "Integration tests for uv-nix"
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+markers = [
+    "docker: tests that require Docker",
+    "slow: large packages that take a long time to install (pandas, scipy)",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "docker>=7",
+]

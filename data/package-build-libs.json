@@ -1,0 +1,4 @@
+{
+  "psycopg2": ["libpq", "libpq.pg_config"],
+  "psycopg2-binary": ["libpq", "libpq.pg_config"]
+}
