@@ -83,14 +83,15 @@ fn resolve_config() -> Result<NixConfig, String> {
         return Ok(cached);
     }
 
-    // Cache miss — resolve via nix-build
-    debug!("Resolving NixConfig via nix-build (first run or cache miss)");
+    // Cache miss — resolve via nix build
+    crate::status("Resolving", "nix configuration (first run)");
     let config = build_nix_config(&source)
         .map_err(|e| format!("Failed to resolve Nix configuration:\n\n{e}"))?;
 
     if let Err(err) = save_cache(&cache_key, &config) {
         warn!("Failed to cache NixConfig: {err}");
     }
+    crate::status("Resolved", "nix configuration");
     Ok(config)
 }
 

@@ -8,6 +8,8 @@ devenv.local.nix
 # pre-commit
 .pre-commit-config.yaml
 
+# claude
+.claude
 
 # Added by cargo
 /target

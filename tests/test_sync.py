@@ -281,10 +281,11 @@ class TestSyncNativePackageDocker:
         _sync_package(uv_binary, python_bin, env, project_dir, name, dependencies)
         venv_dir = project_dir / ".venv"
 
-        # Resolve the Python store path (it's a symlink)
+        # Resolve the Python store path via .nix reference symlink
         cpython_dir = python_bin.parent.parent
-        if cpython_dir.is_symlink():
-            python_store_path = str(cpython_dir.resolve())
+        nix_ref = cpython_dir.with_suffix(".nix")
+        if nix_ref.is_symlink():
+            python_store_path = str(nix_ref.resolve())
         else:
             python_store_path = str(cpython_dir)
 

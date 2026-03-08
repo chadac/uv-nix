@@ -143,6 +143,9 @@ pub fn nix_patch_python(
     python_install_dir: &Path,
     source: &NixpkgsSource,
 ) -> anyhow::Result<PathBuf> {
+    crate::status("Building", "patched Python derivation (nix)");
     let store_path = nix_store_add(python_install_dir)?;
-    nix_build_patched(&store_path, source)
+    let result = nix_build_patched(&store_path, source)?;
+    crate::status("Built", &format!("{}", result.display()));
+    Ok(result)
 }

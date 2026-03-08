@@ -39,12 +39,12 @@ def find_cpython_dir(tmp_python_dir: Path) -> Path:
 class TestPatchPythonInstall:
     """Test that `uv python install` produces a correctly patched Python."""
 
-    def test_install_creates_symlink(
+    def test_install_creates_nix_ref(
         self, uv_binary: Path, nix_available: bool, tmp_python_dir: Path
     ):
-        """After install, the cpython directory should be a symlink to /nix/store/."""
+        """After install, a .nix sibling should be a symlink to /nix/store/."""
         if not nix_available:
-            pytest.skip("nix-build not available on PATH")
+            pytest.skip("nix not available on PATH")
 
         env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
 
@@ -52,13 +52,25 @@ class TestPatchPythonInstall:
         assert result.returncode == 0, f"uv python install failed:\n{result.stderr}"
 
         cpython_dir = find_cpython_dir(tmp_python_dir)
-        assert cpython_dir.is_symlink(), (
-            f"cpython dir should be a symlink, got: {cpython_dir}"
+        nix_ref = cpython_dir.parent / f"{cpython_dir.name}.nix"
+        assert nix_ref.is_symlink(), (
+            f".nix reference should be a symlink, got: {nix_ref}"
         )
 
-        target = cpython_dir.resolve()
+        target = nix_ref.resolve()
         assert str(target).startswith("/nix/store/"), (
-            f"Symlink should point to /nix/store/, got: {target}"
+            f".nix symlink should point to /nix/store/, got: {target}"
+        )
+
+        # The python dir itself should be a regular directory (writable)
+        assert cpython_dir.is_dir() and not cpython_dir.is_symlink(), (
+            f"cpython dir should be a regular directory, got: {cpython_dir}"
+        )
+
+        # But files inside should be symlinks to the nix store
+        python_bin = cpython_dir / "bin" / "python3.12"
+        assert python_bin.is_symlink(), (
+            f"python binary should be a symlink to nix store"
         )
 
     def test_patched_python_runs(
@@ -161,9 +173,10 @@ class TestPatchPythonDocker:
         assert result.returncode == 0
 
         cpython_dir = find_cpython_dir(tmp_python_dir)
-        assert cpython_dir.is_symlink()
+        nix_ref = cpython_dir.parent / f"{cpython_dir.name}.nix"
+        assert nix_ref.is_symlink()
 
-        store_path = cpython_dir.resolve()
+        store_path = nix_ref.resolve()
         python_bin = f"/nix/store/{store_path.name}/bin/python3.12"
 
         output = docker_client.containers.run(
@@ -186,7 +199,7 @@ class TestPatchPythonDocker:
     ):
         """Key stdlib modules (including C extensions) should import in the container."""
         if not nix_available:
-            pytest.skip("nix-build not available on PATH")
+            pytest.skip("nix not available on PATH")
 
         env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
 
@@ -194,8 +207,9 @@ class TestPatchPythonDocker:
         assert result.returncode == 0
 
         cpython_dir = find_cpython_dir(tmp_python_dir)
-        assert cpython_dir.is_symlink()
-        store_path = cpython_dir.resolve()
+        nix_ref = cpython_dir.parent / f"{cpython_dir.name}.nix"
+        assert nix_ref.is_symlink()
+        store_path = nix_ref.resolve()
         python_bin = f"/nix/store/{store_path.name}/bin/python3.12"
 
         # Test stdlib modules including C extensions (ssl, sqlite3, ctypes, etc.)
