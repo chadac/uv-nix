@@ -94,5 +94,25 @@
           default = uvUnwrapped;
         }
       );
+
+      devShells = forAllSystems (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in {
+          default = pkgs.mkShell {
+            buildInputs = [
+              pkgs.rustc
+              pkgs.cargo
+              pkgs.just
+              pkgs.python3
+            ];
+
+            shellHook = ''
+              export CARGO_HOME="$PWD/.cargo"
+              export PATH="$PWD/uv/target/debug:$PATH"
+            '';
+          };
+        }
+      );
     };
 }
