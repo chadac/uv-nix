@@ -19,5 +19,6 @@ markers = [
 [project.optional-dependencies]
 test = [
     "pytest>=8",
+    "pytest-xdist>=3",
     "docker>=7",
 ]

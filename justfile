@@ -28,8 +28,7 @@ test *ARGS="-m 'not docker and not slow'": build
     CA_BUNDLE="$(ls -d /nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | sort | tail -1)"
     GIT_BIN_DIR="$(dirname "$(readlink -f "$(which git)")")"
     GIT_CORE_DIR="$(git --exec-path)"
-    PYTEST_DIR="$(dirname "$(readlink -f "$(nix-shell -p python3 python3Packages.pytest --run 'which pytest')")")"
-    PYTHON_DIR="$(dirname "$(readlink -f "$(nix-shell -p python3 --run 'which python3')")")"
+    PYTEST="$(nix-shell -p python3 python3Packages.pytest python3Packages.pytest-xdist --run 'readlink -f $(which pytest)')"
 
     # Persistent cache for Python installs + nix config
     mkdir -p "{{test-cache}}/python" "{{test-cache}}/uv-nix-config"
@@ -47,14 +46,14 @@ test *ARGS="-m 'not docker and not slow'": build
         -v "$(pwd)/{{test-cache}}/uv-nix-config:/root/.cache/uv-nix" \
         -e "UV_BIN=/usr/local/bin/uv" \
         -e "UV_NIX_TEST_PYTHON_DIR=/tmp/uv-nix-test-python" \
-        -e "PATH=/usr/local/bin:/usr/bin:/bin:/nix-bin:/git-bin:$PYTEST_DIR:$PYTHON_DIR" \
+        -e "PATH=/usr/local/bin:/usr/bin:/bin:/nix-bin:/git-bin" \
         -e "NIX_REMOTE=daemon" \
         -e "NIX_SSL_CERT_FILE=$CA_BUNDLE" \
         -e "SSL_CERT_FILE=$CA_BUNDLE" \
         -e "GIT_SSL_CAINFO=$CA_BUNDLE" \
         -e "GIT_EXEC_PATH=/git-core" \
         busybox \
-        pytest tests/ -v -x {{ARGS}}
+        "$PYTEST" tests/ -v -n auto {{ARGS}}
 
 # Clear persistent test cache (forces re-download of Python etc.)
 test-clean:
