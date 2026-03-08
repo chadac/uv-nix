@@ -105,6 +105,17 @@
               pkgs.cargo
               pkgs.just
               pkgs.python3
+              # Build dependencies for uv
+              pkgs.bzip2
+              pkgs.xz
+              pkgs.zstd
+              pkgs.openssl
+              pkgs.pkg-config
+            ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.darwin.apple_sdk.frameworks.Security
+              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+              pkgs.darwin.apple_sdk.frameworks.CoreFoundation
+              pkgs.libiconv
             ];
 
             shellHook = ''
