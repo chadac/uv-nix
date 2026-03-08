@@ -15,14 +15,53 @@ nix-build: sync-lockfile
 check:
     cargo check
 
-# Run tests. Each test spawns an isolated Docker container.
-# pytest runs on the host; uv runs inside busybox containers.
-test *ARGS="-m 'not docker and not slow and not source_build'": build
+# =============================================================================
+# Test commands (Rust-based)
+# =============================================================================
+
+# Run fast wheel install tests
+test: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --test-threads=4
+
+# Run all wheel tests including slow ones
+test-all: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --include-ignored --test-threads=4
+
+# Run source build tests (slow)
+test-source: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test source_build -- --ignored --test-threads=2
+
+# Run Python patching tests
+test-patch: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test python_patch
+
+# Run a specific package test
+test-pkg PKG: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install {{PKG}}
+
+# Run tests sequentially (for debugging)
+test-seq: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --test-threads=1
+
+# Run tests with Docker containers (Linux isolation)
+test-docker: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --features docker-tests
+
+# Clear test venv cache
+test-clean:
+    rm -rf /tmp/uv-nix-tests
+
+# =============================================================================
+# Legacy pytest tests (deprecated)
+# =============================================================================
+
+# Run old pytest-based tests
+test-legacy *ARGS="-m 'not docker and not slow and not source_build'": build
     cd tests && uv run pytest -v -n auto {{ARGS}}
 
-# Clear persistent test cache (forces re-download of Python etc.)
-test-clean:
-    rm -rf .cache/test
+# =============================================================================
+# Docker utilities
+# =============================================================================
 
 # Spawn an interactive Docker container with uv + nix on PATH
 # Usage: just docker [image]

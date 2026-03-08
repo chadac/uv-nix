@@ -14,3 +14,21 @@ walkdir = { version = "2" }
 
 [dev-dependencies]
 tempfile = { version = "3" }
+serde_json = { version = "1" }
+
+[features]
+default = []
+docker-tests = []
+slow-tests = []
+
+[[test]]
+name = "wheel_install"
+path = "tests/wheel_install.rs"
+
+[[test]]
+name = "source_build"
+path = "tests/source_build.rs"
+
+[[test]]
+name = "python_patch"
+path = "tests/python_patch.rs"

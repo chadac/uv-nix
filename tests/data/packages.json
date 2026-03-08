@@ -1,0 +1,172 @@
+{
+  "numpy": {
+    "import_check": "import numpy; print(numpy.__version__)"
+  },
+  "pandas": {
+    "import_check": "import pandas; print(pandas.__version__)",
+    "slow": true
+  },
+  "scipy": {
+    "import_check": "import scipy; print(scipy.__version__)",
+    "slow": true
+  },
+  "pillow": {
+    "import_check": "from PIL import Image; print('ok')"
+  },
+  "lxml": {
+    "import_check": "from lxml import etree; print(etree.LXML_VERSION)"
+  },
+  "cryptography": {
+    "import_check": "from cryptography.hazmat.primitives.ciphers import Cipher; print('ok')"
+  },
+  "pyyaml": {
+    "import_check": "import yaml; yaml.CSafeLoader; print('ok')"
+  },
+  "cffi": {
+    "import_check": "import _cffi_backend; print('ok')"
+  },
+  "markupsafe": {
+    "import_check": "import markupsafe; print(markupsafe.__version__)"
+  },
+  "msgpack": {
+    "import_check": "import msgpack; print(msgpack.packb({'a': 1}))"
+  },
+  "ujson": {
+    "import_check": "import ujson; print(ujson.dumps({'a': 1}))"
+  },
+  "bcrypt": {
+    "import_check": "import bcrypt; print('ok')"
+  },
+  "orjson": {
+    "import_check": "import orjson; print(orjson.dumps({'a': 1}))"
+  },
+  "pydantic": {
+    "import_check": "from pydantic import BaseModel; print('ok')"
+  },
+  "rpds-py": {
+    "import_check": "import rpds; print(rpds.HashTrieMap({'a': 1}))"
+  },
+  "regex": {
+    "import_check": "import regex; print(regex.search(r'\\w+', 'hello').group())"
+  },
+  "psycopg2": {
+    "import_check": "import psycopg2; print(psycopg2.__version__)",
+    "skip_wheel": true
+  },
+  "psycopg": {
+    "import_check": "import psycopg; print('ok')"
+  },
+  "psycopg-binary": {
+    "import_check": "import psycopg; print('ok')"
+  },
+  "grpcio": {
+    "import_check": "import grpc; print(grpc.__version__)",
+    "slow": true
+  },
+  "h5py": {
+    "import_check": "import h5py; print(h5py.__version__)",
+    "slow": true
+  },
+  "matplotlib": {
+    "import_check": "import matplotlib; print(matplotlib.__version__)",
+    "slow": true
+  },
+  "pyzmq": {
+    "import_check": "import zmq; print(zmq.__version__)"
+  },
+  "pycurl": {
+    "import_check": "import pycurl; print(pycurl.version)"
+  },
+  "shapely": {
+    "import_check": "import shapely; print(shapely.__version__)"
+  },
+  "pycairo": {
+    "import_check": "import cairo; print(cairo.version)"
+  },
+  "reportlab": {
+    "import_check": "import reportlab; print(reportlab.__version__)"
+  },
+  "av": {
+    "import_check": "import av; print(av.__version__)",
+    "slow": true
+  },
+  "aiokafka": {
+    "import_check": "import aiokafka; print(aiokafka.__version__)"
+  },
+  "soundfile": {
+    "import_check": "import soundfile; print(soundfile.__version__)"
+  },
+  "ruamel-yaml": {
+    "import_check": "from ruamel.yaml import YAML; print('ok')"
+  },
+  "tables": {
+    "import_check": "import tables; print(tables.__version__)",
+    "slow": true
+  },
+  "pysodium": {
+    "import_check": "import pysodium; print('ok')"
+  },
+  "plyvel": {
+    "import_check": "import plyvel; print('ok')"
+  },
+  "coincurve": {
+    "import_check": "import coincurve; print('ok')"
+  },
+  "imagecodecs": {
+    "import_check": "import imagecodecs; print('ok')",
+    "slow": true
+  },
+  "pyproj": {
+    "import_check": "import pyproj; print(pyproj.__version__)",
+    "slow": true
+  },
+  "evdev": {
+    "import_check": "import evdev; print('ok')",
+    "skip_darwin": true
+  },
+  "aiohttp": {
+    "import_check": "import aiohttp; print(aiohttp.__version__)"
+  },
+  "uvloop": {
+    "import_check": "import uvloop; print('ok')"
+  },
+  "gevent": {
+    "import_check": "import gevent; print(gevent.__version__)"
+  },
+  "asyncpg": {
+    "import_check": "import asyncpg; print('ok')"
+  },
+  "tokenizers": {
+    "import_check": "import tokenizers; print('ok')",
+    "slow": true
+  },
+  "polars": {
+    "import_check": "import polars; print(polars.__version__)",
+    "slow": true
+  },
+  "pyarrow": {
+    "import_check": "import pyarrow; print(pyarrow.__version__)",
+    "slow": true
+  },
+  "pynacl": {
+    "import_check": "import nacl; print('ok')"
+  },
+  "argon2-cffi-bindings": {
+    "import_check": "import _argon2_cffi_bindings; print('ok')"
+  },
+  "fiona": {
+    "import_check": "import fiona; print('ok')",
+    "slow": true
+  },
+  "rasterio": {
+    "import_check": "import rasterio; print('ok')",
+    "slow": true
+  },
+  "scikit-learn": {
+    "import_check": "import sklearn; print(sklearn.__version__)",
+    "slow": true
+  },
+  "dulwich": {
+    "import_check": "import dulwich; print('ok')"
+  }
+}
