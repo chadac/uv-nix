@@ -3,6 +3,14 @@ name = "uv-nix-tests"
 version = "0.0.1"
 description = "Integration tests for uv-nix"
 requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8",
+    "pytest-xdist>=3",
+    "docker>=7",
+]
+
+[tool.setuptools]
+py-modules = []
 
 [build-system]
 requires = ["setuptools"]
@@ -16,9 +24,5 @@ markers = [
     "source_build: tests that build packages from source (--no-binary)",
 ]
 
-[project.optional-dependencies]
-test = [
-    "pytest>=8",
-    "pytest-xdist>=3",
-    "docker>=7",
-]
+[tool.uv-nix]
+nixpkgs = "github:NixOS/nixpkgs/917fec990948658ef1ccd07cef2a1ef060786846"
