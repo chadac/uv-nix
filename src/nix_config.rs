@@ -249,7 +249,10 @@ in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
   library_path = pkgs.lib.makeLibraryPath allBuildLibs;
   include_path = builtins.concatStringsSep ":" (map (p: "${{pkgs.lib.getDev p}}/include") allBuildLibs);
   pkg_config_path = builtins.concatStringsSep ":" (map (p: "${{pkgs.lib.getDev p}}/lib/pkgconfig") allBuildLibs);
-  bin_path = builtins.concatStringsSep ":" (map (p: "${{pkgs.lib.getBin p}}/bin") allBuildLibs);
+  bin_path = builtins.concatStringsSep ":" ([
+    "${{pkgs.stdenv.cc}}/bin"
+    "${{pkgs.coreutils}}/bin"
+  ] ++ (map (p: "${{pkgs.lib.getBin p}}/bin") allBuildLibs));
   pkg_config = "${{pkgs.pkg-config}}/bin/pkg-config";
 }})"#
     );
