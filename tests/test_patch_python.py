@@ -1,6 +1,7 @@
 """Tests for Python interpreter patching via Nix derivation."""
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -91,6 +92,8 @@ class TestPatchPythonInstall:
         """readelf should show the Nix dynamic linker."""
         if not nix_available:
             pytest.skip("nix-build not available on PATH")
+        if not shutil.which("readelf"):
+            pytest.skip("readelf not available on PATH")
 
         env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
 
