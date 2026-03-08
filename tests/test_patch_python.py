@@ -1,236 +1,121 @@
-"""Tests for Python interpreter patching via Nix derivation."""
+"""Tests for Python interpreter patching via Nix derivation.
+
+Each test runs in an isolated Docker container (busybox + nix mounts).
+"""
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 
-def run_uv(
-    uv_binary: Path,
-    args: list[str],
-    env_overrides: dict[str, str] | None = None,
-    cwd: Path | None = None,
-) -> subprocess.CompletedProcess:
-    """Run uv with given args and environment."""
-    env = os.environ.copy()
-    if env_overrides:
-        env.update(env_overrides)
-    return subprocess.run(
-        [str(uv_binary), *args],
-        env=env,
-        capture_output=True,
-        text=True,
-        cwd=cwd,
-        timeout=300,
-    )
+def _docker_env() -> dict:
+    """Resolve nix/SSL/git paths needed for Docker containers."""
+    nix_bin = os.popen("readlink -f $(which nix)").read().strip()
+    git_bin = os.popen("readlink -f $(which git)").read().strip()
+    git_core_dir = os.popen("git --exec-path").read().strip()
+    ca_bundle = os.popen(
+        "ls -d /nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | sort | tail -1"
+    ).read().strip()
+    project_root = Path(__file__).parent.parent
+    uv_bin = os.environ.get("UV_BIN", str(project_root / "uv" / "target" / "debug" / "uv"))
+    return {
+        "uv_bin": uv_bin,
+        "nix_bin_dir": str(Path(nix_bin).parent),
+        "git_bin_dir": str(Path(git_bin).parent),
+        "git_core_dir": git_core_dir,
+        "ca_bundle": ca_bundle,
+    }
 
 
-def find_cpython_dir(tmp_python_dir: Path) -> Path:
-    """Find the versioned cpython directory (not the unversioned symlink)."""
-    # e.g. cpython-3.12.13-linux-x86_64-gnu (versioned, not the cpython-3.12-... symlink)
-    candidates = sorted(tmp_python_dir.glob("cpython-3.12.*"))
-    assert candidates, f"No cpython-3.12.* directory found in {tmp_python_dir}"
-    return candidates[0]
+_DOCKER_ENV: dict | None = None
+
+
+def _get_docker_env() -> dict:
+    global _DOCKER_ENV
+    if _DOCKER_ENV is None:
+        _DOCKER_ENV = _docker_env()
+    return _DOCKER_ENV
+
+
+def run_in_container(script: str, timeout: int = 300) -> subprocess.CompletedProcess:
+    """Run a shell script in a busybox container with nix mounts."""
+    env = _get_docker_env()
+    cmd = [
+        "docker", "run", "--rm",
+        "--network", "host",
+        "-v", f"{env['uv_bin']}:/usr/local/bin/uv:ro",
+        "-v", "/nix:/nix",
+        "-v", f"{env['nix_bin_dir']}:/nix-bin:ro",
+        "-v", f"{env['git_bin_dir']}:/git-bin:ro",
+        "-v", f"{env['git_core_dir']}:/git-core:ro",
+        "-e", "PATH=/usr/local/bin:/usr/bin:/bin:/nix-bin:/git-bin",
+        "-e", "NIX_REMOTE=daemon",
+        "-e", f"NIX_SSL_CERT_FILE={env['ca_bundle']}",
+        "-e", f"SSL_CERT_FILE={env['ca_bundle']}",
+        "-e", f"GIT_SSL_CAINFO={env['ca_bundle']}",
+        "-e", f"GIT_EXEC_PATH=/git-core",
+        "busybox",
+        "/bin/sh", "-c", script,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
 class TestPatchPythonInstall:
     """Test that `uv python install` produces a correctly patched Python."""
 
-    def test_install_creates_nix_ref(
-        self, uv_binary: Path, nix_available: bool, tmp_python_dir: Path
-    ):
-        """After install, a .nix sibling should be a symlink to /nix/store/."""
-        if not nix_available:
-            pytest.skip("nix not available on PATH")
+    def test_install_and_nix_ref(self):
+        """After install, a .nix sibling should reference /nix/store/."""
+        result = run_in_container("""
+            cd /tmp
+            uv python install 3.12
+            PYDIR=$(ls -d /root/.local/share/uv/python/cpython-3.12.* 2>/dev/null | head -1)
+            NIXREF="${PYDIR}.nix"
+            # Check .nix reference exists and points to /nix/store
+            test -L "$NIXREF" && readlink "$NIXREF" | grep -q '^/nix/store/' && echo "NIX_REF_OK"
+            # Check python dir is a real directory (writable)
+            test -d "$PYDIR" && ! test -L "$PYDIR" && echo "DIR_OK"
+            # Check files inside are symlinks to nix store
+            test -L "$PYDIR/bin/python3.12" && echo "SYMLINK_OK"
+        """)
+        assert result.returncode == 0, f"Failed:\n{result.stderr}"
+        assert "NIX_REF_OK" in result.stdout, f"No .nix ref:\n{result.stdout}"
+        assert "DIR_OK" in result.stdout, f"Dir is not writable:\n{result.stdout}"
+        assert "SYMLINK_OK" in result.stdout, f"Files not symlinked:\n{result.stdout}"
 
-        env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
-
-        result = run_uv(uv_binary, ["python", "install", "3.12"], env_overrides=env)
-        assert result.returncode == 0, f"uv python install failed:\n{result.stderr}"
-
-        cpython_dir = find_cpython_dir(tmp_python_dir)
-        nix_ref = cpython_dir.parent / f"{cpython_dir.name}.nix"
-        assert nix_ref.is_symlink(), (
-            f".nix reference should be a symlink, got: {nix_ref}"
-        )
-
-        target = nix_ref.resolve()
-        assert str(target).startswith("/nix/store/"), (
-            f".nix symlink should point to /nix/store/, got: {target}"
-        )
-
-        # The python dir itself should be a regular directory (writable)
-        assert cpython_dir.is_dir() and not cpython_dir.is_symlink(), (
-            f"cpython dir should be a regular directory, got: {cpython_dir}"
-        )
-
-        # But files inside should be symlinks to the nix store
-        python_bin = cpython_dir / "bin" / "python3.12"
-        assert python_bin.is_symlink(), (
-            f"python binary should be a symlink to nix store"
-        )
-
-    def test_patched_python_runs(
-        self, uv_binary: Path, nix_available: bool, tmp_python_dir: Path
-    ):
+    def test_patched_python_runs(self):
         """The patched Python interpreter should be executable."""
-        if not nix_available:
-            pytest.skip("nix-build not available on PATH")
+        result = run_in_container("""
+            cd /tmp
+            uv python install 3.12
+            PYDIR=$(ls -d /root/.local/share/uv/python/cpython-3.12.* 2>/dev/null | head -1)
+            "$PYDIR/bin/python3.12" -c "import sys; print(sys.version)"
+        """)
+        assert result.returncode == 0, f"Failed:\n{result.stderr}"
+        assert "3.12" in result.stdout
 
-        env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
+    def test_ssl_module_works(self):
+        """The patched Python should be able to import ssl."""
+        result = run_in_container("""
+            cd /tmp
+            uv python install 3.12
+            PYDIR=$(ls -d /root/.local/share/uv/python/cpython-3.12.* 2>/dev/null | head -1)
+            "$PYDIR/bin/python3.12" -c "import ssl; print(ssl.OPENSSL_VERSION)"
+        """)
+        assert result.returncode == 0, f"Failed:\n{result.stderr}"
+        assert "OpenSSL" in result.stdout
 
-        result = run_uv(uv_binary, ["python", "install", "3.12"], env_overrides=env)
-        assert result.returncode == 0, f"uv python install failed:\n{result.stderr}"
-
-        cpython_dir = find_cpython_dir(tmp_python_dir)
-        python_bin = cpython_dir / "bin" / "python3.12"
-        assert python_bin.exists(), f"Python binary not found at {python_bin}"
-
-        proc = subprocess.run(
-            [str(python_bin), "-c", "import sys; print(sys.version)"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert proc.returncode == 0, f"Python failed to run:\n{proc.stderr}"
-        assert "3.12" in proc.stdout
-
-    def test_readelf_shows_correct_interpreter(
-        self, uv_binary: Path, nix_available: bool, tmp_python_dir: Path
-    ):
-        """readelf should show the Nix dynamic linker."""
-        if not nix_available:
-            pytest.skip("nix-build not available on PATH")
-        if not shutil.which("readelf"):
-            pytest.skip("readelf not available on PATH")
-
-        env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
-
-        result = run_uv(uv_binary, ["python", "install", "3.12"], env_overrides=env)
-        assert result.returncode == 0
-
-        cpython_dir = find_cpython_dir(tmp_python_dir)
-        python_bin = cpython_dir / "bin" / "python3.12"
-
-        proc = subprocess.run(
-            ["readelf", "-l", str(python_bin)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert proc.returncode == 0
-        assert "/nix/store/" in proc.stdout, (
-            f"Interpreter should point to /nix/store/:\n{proc.stdout}"
-        )
-
-    def test_ssl_module_works(
-        self, uv_binary: Path, nix_available: bool, tmp_python_dir: Path
-    ):
-        """The patched Python should be able to import ssl (linked against openssl)."""
-        if not nix_available:
-            pytest.skip("nix-build not available on PATH")
-
-        env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
-
-        result = run_uv(uv_binary, ["python", "install", "3.12"], env_overrides=env)
-        assert result.returncode == 0
-
-        cpython_dir = find_cpython_dir(tmp_python_dir)
-        python_bin = cpython_dir / "bin" / "python3.12"
-
-        proc = subprocess.run(
-            [str(python_bin), "-c", "import ssl; print(ssl.OPENSSL_VERSION)"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert proc.returncode == 0, f"ssl import failed:\n{proc.stderr}"
-        assert "OpenSSL" in proc.stdout
-
-
-@pytest.mark.docker
-class TestPatchPythonDocker:
-    """Test patched Python in a minimal Docker container (no host libs)."""
-
-    def test_python_runs_in_container(
-        self,
-        uv_binary: Path,
-        nix_available: bool,
-        tmp_python_dir: Path,
-        docker_client,
-        scratch_image,
-    ):
-        """Patched Python should run in a FROM scratch container with only Nix store paths."""
-        if not nix_available:
-            pytest.skip("nix-build not available on PATH")
-
-        env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
-
-        result = run_uv(uv_binary, ["python", "install", "3.12"], env_overrides=env)
-        assert result.returncode == 0
-
-        cpython_dir = find_cpython_dir(tmp_python_dir)
-        nix_ref = cpython_dir.parent / f"{cpython_dir.name}.nix"
-        assert nix_ref.is_symlink()
-
-        store_path = nix_ref.resolve()
-        python_bin = f"/nix/store/{store_path.name}/bin/python3.12"
-
-        output = docker_client.containers.run(
-            scratch_image.id,
-            command=[python_bin, "-c", "import sys; print(sys.version)"],
-            volumes={"/nix/store": {"bind": "/nix/store", "mode": "ro"}},
-            remove=True,
-            stdout=True,
-            stderr=True,
-        )
-        assert "3.12" in output.decode(), f"Expected Python 3.12 output, got: {output.decode()}"
-
-    def test_stdlib_imports_in_container(
-        self,
-        uv_binary: Path,
-        nix_available: bool,
-        tmp_python_dir: Path,
-        docker_client,
-        scratch_image,
-    ):
-        """Key stdlib modules (including C extensions) should import in the container."""
-        if not nix_available:
-            pytest.skip("nix not available on PATH")
-
-        env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
-
-        result = run_uv(uv_binary, ["python", "install", "3.12"], env_overrides=env)
-        assert result.returncode == 0
-
-        cpython_dir = find_cpython_dir(tmp_python_dir)
-        nix_ref = cpython_dir.parent / f"{cpython_dir.name}.nix"
-        assert nix_ref.is_symlink()
-        store_path = nix_ref.resolve()
-        python_bin = f"/nix/store/{store_path.name}/bin/python3.12"
-
-        # Test stdlib modules including C extensions (ssl, sqlite3, ctypes, etc.)
-        check = "; ".join([
-            "import os",
-            "import sys",
-            "import json",
-            "import ssl",
-            "import sqlite3",
-            "import ctypes",
-            "import hashlib",
-            "import zlib",
-            "print('stdlib ok')",
-        ])
-
-        output = docker_client.containers.run(
-            scratch_image.id,
-            command=[python_bin, "-c", check],
-            volumes={"/nix/store": {"bind": "/nix/store", "mode": "ro"}},
-            remove=True,
-            stdout=True,
-            stderr=True,
-        )
-        assert "stdlib ok" in output.decode(), f"Stdlib imports failed: {output.decode()}"
+    def test_stdlib_imports(self):
+        """Key stdlib modules including C extensions should import."""
+        result = run_in_container("""
+            cd /tmp
+            uv python install 3.12
+            PYDIR=$(ls -d /root/.local/share/uv/python/cpython-3.12.* 2>/dev/null | head -1)
+            "$PYDIR/bin/python3.12" -c "
+import os, sys, json, ssl, sqlite3, ctypes, hashlib, zlib
+print('stdlib ok')
+"
+        """)
+        assert result.returncode == 0, f"Failed:\n{result.stderr}"
+        assert "stdlib ok" in result.stdout

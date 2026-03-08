@@ -1,30 +1,25 @@
-import fcntl
 import io
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 
-def _find_uv_binary() -> Path:
-    """Find the uv binary: check UV_BIN env, then nix build result, then PATH."""
+@pytest.fixture(scope="session")
+def uv_binary() -> Path:
+    """Path to the uv binary under test."""
     if env_bin := os.environ.get("UV_BIN"):
         return Path(env_bin)
 
-    # Check the project result symlink (nix build output)
     project_root = Path(__file__).parent.parent
-    result = project_root / "result" / "bin" / "uv"
-    if result.exists():
-        return result
+    for candidate in [
+        project_root / "result" / "bin" / "uv",
+        project_root / "uv" / "target" / "debug" / "uv",
+    ]:
+        if candidate.exists():
+            return candidate
 
-    # Check for debug build in uv submodule
-    debug_bin = project_root / "uv" / "target" / "debug" / "uv"
-    if debug_bin.exists():
-        return debug_bin
-
-    # Fall back to PATH
     uv_path = shutil.which("uv")
     if uv_path:
         return Path(uv_path)
@@ -32,88 +27,15 @@ def _find_uv_binary() -> Path:
     pytest.skip("No uv binary found. Set UV_BIN or run 'nix build'.")
 
 
-def _nix_available() -> bool:
-    """Check if nix is available on PATH."""
-    return shutil.which("nix") is not None
-
-
-@pytest.fixture(scope="session")
-def uv_binary() -> Path:
-    """Path to the uv binary under test."""
-    return _find_uv_binary()
-
-
 @pytest.fixture(scope="session")
 def nix_available() -> bool:
     """Whether Nix is available (nix on PATH)."""
-    return _nix_available()
-
-
-@pytest.fixture(scope="session")
-def python_install_dir() -> Path:
-    """Persistent directory for UV_PYTHON_INSTALL_DIR.
-
-    Uses UV_NIX_TEST_PYTHON_DIR env var if set (allows reuse across runs),
-    otherwise falls back to a default tmp dir.
-    """
-    if env_dir := os.environ.get("UV_NIX_TEST_PYTHON_DIR"):
-        d = Path(env_dir)
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-    d = Path("/tmp/uv-nix-test-python")
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-@pytest.fixture(scope="session")
-def installed_python(
-    uv_binary: Path,
-    nix_available: bool,
-    python_install_dir: Path,
-) -> tuple[Path, dict[str, str]]:
-    """Install Python 3.12 once, shared across all tests in the session.
-
-    Uses a file lock so only one pytest-xdist worker installs;
-    the rest wait then use the cached result.
-    """
-    if not nix_available:
-        pytest.skip("nix not available on PATH")
-
-    env = {"UV_PYTHON_INSTALL_DIR": str(python_install_dir)}
-    lock_path = python_install_dir / ".install.lock"
-
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        try:
-            # Check if already installed (by us or another worker)
-            candidates = sorted(python_install_dir.glob("cpython-3.12.*"))
-            if candidates:
-                python_bin = candidates[0] / "bin" / "python3.12"
-                if python_bin.exists():
-                    return python_bin, env
-
-            # Install fresh
-            result = subprocess.run(
-                [str(uv_binary), "python", "install", "3.12"],
-                env={**os.environ, **env},
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-            assert result.returncode == 0, f"uv python install failed:\n{result.stderr}"
-
-            candidates = sorted(python_install_dir.glob("cpython-3.12.*"))
-            assert candidates, f"No cpython-3.12.* found in {python_install_dir}"
-            python_bin = candidates[0] / "bin" / "python3.12"
-            assert python_bin.exists()
-            return python_bin, env
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+    return shutil.which("nix") is not None
 
 
 @pytest.fixture
 def tmp_python_dir(tmp_path: Path) -> Path:
-    """Temporary directory for UV_PYTHON_INSTALL_DIR (non-persistent)."""
+    """Temporary directory for UV_PYTHON_INSTALL_DIR."""
     d = tmp_path / "python"
     d.mkdir()
     return d
@@ -121,14 +43,10 @@ def tmp_python_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def docker_client():
-    """Docker client for container-based tests.
-
-    Auto-detects rootless podman socket if DOCKER_HOST is not set.
-    """
+    """Docker client for container-based tests."""
     try:
         import docker
 
-        # Try rootless podman socket if DOCKER_HOST is not set
         if not os.environ.get("DOCKER_HOST"):
             uid = os.getuid()
             podman_sock = f"/run/user/{uid}/podman/podman.sock"
