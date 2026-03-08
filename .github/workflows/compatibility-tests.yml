@@ -64,6 +64,10 @@ jobs:
       - name: Build patched uv
         run: nix develop --command just build
 
-      # Note: Wheel install tests are skipped on macOS because uv-nix patching
-      # is Linux-specific (patchelf for ELF binaries). macOS uses Mach-O format
-      # and doesn't need NixOS-style patching.
+      - name: Run core tests
+        if: ${{ inputs.test_scope == 'core' }}
+        run: nix develop --command just test
+
+      - name: Run all tests
+        if: ${{ inputs.test_scope == 'all' }}
+        run: nix develop --command just test-all

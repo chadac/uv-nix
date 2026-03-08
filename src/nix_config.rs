@@ -8,11 +8,25 @@ use tracing::{debug, warn};
 
 use crate::nixpkgs;
 
-/// Embedded default runtime library list (for RPATH patching).
+/// Embedded default runtime library config (platform-specific).
 const DEFAULT_LIBS_JSON: &str = include_str!("../data/default-libs.json");
 
 /// Embedded per-Python-package build dependency registry.
 pub(crate) const PACKAGE_BUILD_LIBS_JSON: &str = include_str!("../data/package-build-libs.json");
+
+/// Platform-specific library configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DefaultLibsConfig {
+    /// Libraries available on all platforms
+    #[serde(default)]
+    shared: Vec<String>,
+    /// Linux-only libraries (glibc, util-linux, etc.)
+    #[serde(default)]
+    linux: Vec<String>,
+    /// Darwin-only libraries (libiconv, etc.)
+    #[serde(default)]
+    darwin: Vec<String>,
+}
 
 /// Per-package build dependency entry from package-build-libs.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,12 +35,21 @@ pub(crate) struct PackageBuildEntry {
     pub libs: Vec<String>,
     #[serde(default, rename = "build-tools")]
     pub build_tools: Vec<String>,
+    /// Linux-only libs for this package
+    #[serde(default, rename = "libs-linux")]
+    pub libs_linux: Vec<String>,
+    /// Darwin-only libs for this package
+    #[serde(default, rename = "libs-darwin")]
+    pub libs_darwin: Vec<String>,
 }
 
 /// All Nix paths needed at runtime, resolved from a single `nix-build` call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NixConfig {
-    pub patchelf: PathBuf,
+    /// Path to patchelf (Linux) or install_name_tool (Darwin)
+    pub patcher: PathBuf,
+    /// ELF interpreter path (Linux only, empty on Darwin)
+    #[serde(default)]
     pub interpreter: PathBuf,
     /// Colon-separated RPATH entries (runtime libs only, for patchelf).
     pub rpath: String,
@@ -37,6 +60,16 @@ pub struct NixConfig {
     /// Path to coreutils/bin (for PATH in build env).
     pub coreutils_bin: String,
     pub pkg_config: PathBuf,
+    /// True if running on Darwin/macOS
+    #[serde(default)]
+    pub is_darwin: bool,
+}
+
+// Legacy alias for compatibility
+impl NixConfig {
+    pub fn patchelf(&self) -> &PathBuf {
+        &self.patcher
+    }
 }
 
 static NIX_CONFIG: OnceLock<Result<NixConfig, String>> = OnceLock::new();
@@ -170,8 +203,14 @@ fn load_cache(key: &str) -> Option<NixConfig> {
     let config: NixConfig = serde_json::from_str(&content).ok()?;
 
     // Validate that key paths still exist
-    if !config.patchelf.exists() || !config.interpreter.exists() {
-        debug!("Cached NixConfig paths no longer exist, invalidating");
+    if !config.patcher.exists() {
+        debug!("Cached NixConfig patcher path no longer exists, invalidating");
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    // On Linux, also check interpreter exists
+    if !config.is_darwin && !config.interpreter.as_os_str().is_empty() && !config.interpreter.exists() {
+        debug!("Cached NixConfig interpreter path no longer exists, invalidating");
         let _ = std::fs::remove_file(&path);
         return None;
     }
@@ -197,15 +236,33 @@ fn attr_resolve_expr(attr: &str) -> String {
     )
 }
 
+/// Check if we're running on Darwin/macOS.
+fn is_darwin() -> bool {
+    cfg!(target_os = "macos")
+}
+
 /// Collect all unique lib attrs from both default-libs.json and package-build-libs.json.
 ///
 /// Returns (runtime_attrs, all_lib_attrs). build-tools are excluded — they are
 /// resolved per-package on demand in build_env.rs.
+/// 
+/// Library selection is platform-aware: shared libs are always included,
+/// plus linux-specific or darwin-specific libs based on the current platform.
 fn collect_all_lib_attrs() -> anyhow::Result<(Vec<String>, Vec<String>)> {
-    // Runtime libs (plain list of attr strings)
-    let runtime_attrs: Vec<String> = serde_json::from_str(DEFAULT_LIBS_JSON)?;
+    let darwin = is_darwin();
+    
+    // Runtime libs (platform-specific structure)
+    let libs_config: DefaultLibsConfig = serde_json::from_str(DEFAULT_LIBS_JSON)?;
+    
+    // Combine shared + platform-specific runtime libs
+    let mut runtime_attrs: Vec<String> = libs_config.shared.clone();
+    if darwin {
+        runtime_attrs.extend(libs_config.darwin.clone());
+    } else {
+        runtime_attrs.extend(libs_config.linux.clone());
+    }
 
-    // Package build deps (map of package name → { libs, build-tools })
+    // Package build deps (map of package name → { libs, build-tools, libs-linux, libs-darwin })
     let package_map: std::collections::HashMap<String, PackageBuildEntry> =
         serde_json::from_str(PACKAGE_BUILD_LIBS_JSON)?;
 
@@ -216,8 +273,19 @@ fn collect_all_lib_attrs() -> anyhow::Result<(Vec<String>, Vec<String>)> {
         all_lib_set.insert(attr.clone());
     }
     for entry in package_map.values() {
+        // Shared libs for this package
         for attr in &entry.libs {
             all_lib_set.insert(attr.clone());
+        }
+        // Platform-specific libs for this package
+        if darwin {
+            for attr in &entry.libs_darwin {
+                all_lib_set.insert(attr.clone());
+            }
+        } else {
+            for attr in &entry.libs_linux {
+                all_lib_set.insert(attr.clone());
+            }
         }
     }
 
@@ -229,6 +297,7 @@ fn collect_all_lib_attrs() -> anyhow::Result<(Vec<String>, Vec<String>)> {
 /// Run a single `nix-build -E` to resolve all config paths at once.
 fn build_nix_config(source: &nixpkgs::NixpkgsSource) -> anyhow::Result<NixConfig> {
     let pkgs_expr = nixpkgs::nixpkgs_import_expr(source);
+    let darwin = is_darwin();
 
     let (runtime_attrs, all_lib_attrs) = collect_all_lib_attrs()?;
 
@@ -244,8 +313,10 @@ fn build_nix_config(source: &nixpkgs::NixpkgsSource) -> anyhow::Result<NixConfig
         .collect::<Vec<_>>()
         .join("\n");
 
-    let expr = format!(
-        r#"let
+    // Platform-specific Nix expression
+    let expr = if darwin {
+        format!(
+            r#"let
   pkgs = {pkgs_expr};
   runtimeLibs = [
 {runtime_exprs}
@@ -254,17 +325,40 @@ fn build_nix_config(source: &nixpkgs::NixpkgsSource) -> anyhow::Result<NixConfig
 {lib_exprs}
   ];
 in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
-  patchelf = "${{pkgs.patchelf}}/bin/patchelf";
+  patcher = "${{pkgs.darwin.cctools}}/bin/install_name_tool";
+  interpreter = "";
+  rpath = pkgs.lib.makeLibraryPath runtimeLibs;
+  library_path = pkgs.lib.makeLibraryPath allLibs;
+  cc_bin = "${{pkgs.stdenv.cc}}/bin";
+  coreutils_bin = "${{pkgs.coreutils}}/bin";
+  pkg_config = "${{pkgs.pkg-config}}/bin/pkg-config";
+  is_darwin = true;
+}})"#
+        )
+    } else {
+        format!(
+            r#"let
+  pkgs = {pkgs_expr};
+  runtimeLibs = [
+{runtime_exprs}
+  ];
+  allLibs = [
+{lib_exprs}
+  ];
+in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
+  patcher = "${{pkgs.patchelf}}/bin/patchelf";
   interpreter = pkgs.lib.strings.trim pkgs.stdenv.cc.bintools.dynamicLinker;
   rpath = pkgs.lib.makeLibraryPath runtimeLibs;
   library_path = pkgs.lib.makeLibraryPath allLibs;
   cc_bin = "${{pkgs.stdenv.cc}}/bin";
   coreutils_bin = "${{pkgs.coreutils}}/bin";
   pkg_config = "${{pkgs.pkg-config}}/bin/pkg-config";
+  is_darwin = false;
 }})"#
-    );
+        )
+    };
 
-    debug!("Building NixConfig via nix build");
+    debug!("Building NixConfig via nix build (darwin={})", darwin);
 
     let output = crate::nix_command()
         .arg("build")
@@ -287,7 +381,6 @@ in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
     debug!("Resolved NixConfig: {:?}", config);
     Ok(config)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,13 +426,14 @@ mod tests {
         std::fs::create_dir_all(&cache_path).unwrap();
 
         let config = NixConfig {
-            patchelf: PathBuf::from("/nix/store/xxx/bin/patchelf"),
+            patcher: PathBuf::from("/nix/store/xxx/bin/patchelf"),
             interpreter: PathBuf::from("/nix/store/yyy/lib/ld-linux-x86-64.so.2"),
             rpath: "/nix/store/aaa/lib:/nix/store/bbb/lib".to_string(),
             library_path: "/nix/store/aaa/lib:/nix/store/bbb/lib:/nix/store/ccc/lib".to_string(),
             cc_bin: "/nix/store/ccc/bin".to_string(),
             coreutils_bin: "/nix/store/ddd/bin".to_string(),
             pkg_config: PathBuf::from("/nix/store/zzz/bin/pkg-config"),
+            is_darwin: false,
         };
 
         let json_path = cache_path.join("test-key.json");
@@ -349,19 +443,24 @@ mod tests {
 
         let loaded: NixConfig =
             serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
-        assert_eq!(loaded.patchelf, config.patchelf);
+        assert_eq!(loaded.patcher, config.patcher);
         assert_eq!(loaded.rpath, config.rpath);
         assert_eq!(loaded.library_path, config.library_path);
         assert_eq!(loaded.cc_bin, config.cc_bin);
         assert_eq!(loaded.coreutils_bin, config.coreutils_bin);
+        assert_eq!(loaded.is_darwin, config.is_darwin);
     }
 
     #[test]
     fn test_collect_all_lib_attrs() {
         let (runtime, all_libs) = collect_all_lib_attrs().unwrap();
-        // Runtime should have default-libs entries
-        assert!(runtime.contains(&"glibc".to_string()));
+        // Runtime should have shared libs (openssl is in shared)
         assert!(runtime.contains(&"openssl".to_string()));
+        // On Linux, should have glibc; on Darwin, should have libiconv
+        #[cfg(target_os = "linux")]
+        assert!(runtime.contains(&"glibc".to_string()));
+        #[cfg(target_os = "macos")]
+        assert!(runtime.contains(&"libiconv".to_string()));
         // All libs should include runtime + package lib deps
         assert!(all_libs.len() >= runtime.len());
         // Package lib entries should be present

@@ -2,6 +2,15 @@
   "aiokafka": {
     "libs": ["zlib"]
   },
+  "aiohttp": {
+    "libs": ["llhttp"]
+  },
+  "argon2-cffi-bindings": {
+    "libs": ["libargon2"]
+  },
+  "asyncpg": {
+    "libs": ["libpq"]
+  },
   "av": {
     "libs": ["ffmpeg_4"]
   },
@@ -13,7 +22,8 @@
     "libs": ["libev"]
   },
   "borgbackup": {
-    "libs": ["openssl", "acl"]
+    "libs": ["openssl"],
+    "libs-linux": ["acl"]
   },
   "cffi": {
     "libs": ["libffi"]
@@ -29,13 +39,22 @@
     "build-tools": ["cargo"]
   },
   "cysystemd": {
-    "libs": ["systemd"]
+    "libs-linux": ["systemd"]
   },
   "dbus-python": {
-    "libs": ["dbus", "dbus-glib", "ncurses"]
+    "libs-linux": ["dbus", "dbus-glib", "ncurses"]
+  },
+  "dulwich": {
+    "build-tools": ["cargo"]
   },
   "evdev": {
-    "libs": ["linuxHeaders"]
+    "libs-linux": ["linuxHeaders"]
+  },
+  "fiona": {
+    "libs": ["gdal"]
+  },
+  "gevent": {
+    "libs": ["libev", "libuv", "c-ares"]
   },
   "grpcio": {
     "libs": ["c-ares", "openssl", "zlib"]
@@ -94,6 +113,10 @@
   "plyvel": {
     "libs": ["leveldb"]
   },
+  "polars": {
+    "libs": ["zstd"],
+    "build-tools": ["cargo", "cmake"]
+  },
   "psycopg2": {
     "libs": ["libpq"],
     "build-tools": ["libpq.pg_config"]
@@ -110,20 +133,23 @@
     "libs": ["libpq"],
     "build-tools": ["libpq.pg_config"]
   },
+  "pyarrow": {
+    "libs": ["arrow-cpp"]
+  },
   "pycairo": {
     "libs": ["cairo"]
   },
   "pycurl": {
     "libs": ["curl"]
   },
-  "pydantic": {
+  "pydantic-core": {
     "build-tools": ["cargo"]
   },
   "pyfftw": {
     "libs": ["fftw", "fftwFloat", "fftwLongDouble"]
   },
   "pyfuse3": {
-    "libs": ["fuse3"]
+    "libs-linux": ["fuse3"]
   },
   "pygame": {
     "libs": ["SDL2", "SDL2_image", "SDL2_mixer", "SDL2_ttf", "libpng", "libjpeg", "portmidi", "freetype"]
@@ -137,6 +163,9 @@
   "pymssql": {
     "libs": ["openssl", "libkrb5", "freetds"]
   },
+  "pynacl": {
+    "libs": ["libsodium"]
+  },
   "pyodbc": {
     "libs": ["unixODBC"]
   },
@@ -146,8 +175,14 @@
   "pysodium": {
     "libs": ["libsodium"]
   },
+  "pyyaml": {
+    "libs": ["libyaml"]
+  },
   "pyzmq": {
     "libs": ["libsodium", "zeromq"]
+  },
+  "rasterio": {
+    "libs": ["gdal"]
   },
   "regex": {
     "build-tools": ["cargo"]
@@ -164,6 +199,12 @@
   "ruamel-yaml-clib": {
     "libs": ["libyaml"]
   },
+  "scikit-learn": {
+    "libs": ["blas", "gfortran.cc.lib"]
+  },
+  "scipy": {
+    "libs": ["blas", "lapack", "xsimd", "boost188", "qhull"]
+  },
   "scs": {
     "libs": ["blas"]
   },
@@ -175,5 +216,12 @@
   },
   "tables": {
     "libs": ["hdf5", "c-blosc", "lz4", "zstd"]
+  },
+  "tokenizers": {
+    "libs": ["openssl"],
+    "build-tools": ["cargo"]
+  },
+  "uvloop": {
+    "libs": ["libuv"]
   }
 }

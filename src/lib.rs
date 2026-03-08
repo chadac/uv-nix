@@ -125,16 +125,18 @@ fn is_musl_python(python_dir: &Path) -> bool {
     }
 
     // Fallback: check the ELF interpreter of the Python binary
+    // (only applicable on Linux — Darwin doesn't have ELF interpreters)
+    #[cfg(target_os = "linux")]
     {
         let nix = nix_config::require();
-        let patchelf = &nix.patchelf;
+        let patcher = &nix.patcher;
         let bin_dir = python_dir.join("bin");
         if let Ok(entries) = fs::read_dir(&bin_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name_str = name.to_string_lossy();
                 if name_str.starts_with("python3") && !name_str.contains('-') {
-                    let output = std::process::Command::new(&patchelf)
+                    let output = std::process::Command::new(patcher)
                         .arg("--print-interpreter")
                         .arg(entry.path())
                         .output();

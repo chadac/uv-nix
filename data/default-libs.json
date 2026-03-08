@@ -1,14 +1,22 @@
-[
-  "glibc",
-  "stdenv.cc.cc.lib",
-  "zlib",
-  "libffi",
-  "bzip2",
-  "xz",
-  "ncurses",
-  "readline",
-  "openssl",
-  "sqlite",
-  "expat",
-  "util-linux.out"
-]
+{
+  "shared": [
+    "zlib",
+    "libffi",
+    "bzip2",
+    "xz",
+    "ncurses",
+    "readline",
+    "openssl",
+    "sqlite",
+    "expat"
+  ],
+  "linux": [
+    "glibc",
+    "stdenv.cc.cc.lib",
+    "util-linux.out"
+  ],
+  "darwin": [
+    "libiconv",
+    "darwin.libobjc"
+  ]
+}
