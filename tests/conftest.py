@@ -1,3 +1,4 @@
+import fcntl
 import os
 import shutil
 import subprocess
@@ -127,54 +128,61 @@ def run_lib_test(
 def warmed_image() -> str:
     """Docker image with Python 3.12 pre-installed and patched.
 
-    Built once per session by running `uv python install 3.12` in a
-    busybox container and committing the result.
+    Built once and persisted across sessions. Uses a file lock so
+    only one xdist worker (or pytest session) builds the image;
+    others wait then reuse it.
     """
     image_tag = "uv-nix-test-warmed:latest"
+    lock_path = Path("/tmp/uv-nix-warmup.lock")
 
-    # Check if image already exists
-    check = subprocess.run(
-        ["docker", "image", "inspect", image_tag],
-        capture_output=True,
-    )
-    if check.returncode == 0:
-        return image_tag
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            # Check if image already exists (another worker may have built it)
+            check = subprocess.run(
+                ["docker", "image", "inspect", image_tag],
+                capture_output=True,
+            )
+            if check.returncode == 0:
+                return image_tag
 
-    env = _get_docker_env()
-    name = "uv-nix-warmup"
+            env = _get_docker_env()
+            name = "uv-nix-warmup"
 
-    # Remove stale container if exists
-    subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+            # Remove stale container if exists
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
-    # Run uv python install in a container (don't --rm, we'll commit it)
-    cmd = [
-        "docker", "run",
-        "--name", name,
-        "--network", "host",
-        "-v", f"{env['uv_bin']}:/usr/local/bin/uv:ro",
-        "-v", "/nix:/nix",
-        "-v", f"{env['nix_bin_dir']}:/nix-bin:ro",
-        "-v", f"{env['git_bin_dir']}:/git-bin:ro",
-        "-v", f"{env['git_core_dir']}:/git-core:ro",
-        "-e", "PATH=/usr/local/bin:/usr/bin:/bin:/nix-bin:/git-bin",
-        "-e", "NIX_REMOTE=daemon",
-        "-e", f"NIX_SSL_CERT_FILE={env['ca_bundle']}",
-        "-e", f"SSL_CERT_FILE={env['ca_bundle']}",
-        "-e", f"GIT_SSL_CAINFO={env['ca_bundle']}",
-        "-e", f"GIT_EXEC_PATH=/git-core",
-        "busybox",
-        "/bin/sh", "-c", "uv python install 3.12",
-    ]
+            # Run uv python install in a container (no --rm, we'll commit it)
+            cmd = [
+                "docker", "run",
+                "--name", name,
+                "--network", "host",
+                "-v", f"{env['uv_bin']}:/usr/local/bin/uv:ro",
+                "-v", "/nix:/nix",
+                "-v", f"{env['nix_bin_dir']}:/nix-bin:ro",
+                "-v", f"{env['git_bin_dir']}:/git-bin:ro",
+                "-v", f"{env['git_core_dir']}:/git-core:ro",
+                "-e", "PATH=/usr/local/bin:/usr/bin:/bin:/nix-bin:/git-bin",
+                "-e", "NIX_REMOTE=daemon",
+                "-e", f"NIX_SSL_CERT_FILE={env['ca_bundle']}",
+                "-e", f"SSL_CERT_FILE={env['ca_bundle']}",
+                "-e", f"GIT_SSL_CAINFO={env['ca_bundle']}",
+                "-e", f"GIT_EXEC_PATH=/git-core",
+                "busybox",
+                "/bin/sh", "-c", "uv python install 3.12",
+            ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    assert result.returncode == 0, f"Warmup failed:\n{result.stderr}"
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            assert result.returncode == 0, f"Warmup failed:\n{result.stderr}"
 
-    # Commit the container as an image
-    subprocess.run(
-        ["docker", "commit", name, image_tag],
-        check=True, capture_output=True,
-    )
-    subprocess.run(["docker", "rm", name], capture_output=True)
+            # Commit the container as an image
+            subprocess.run(
+                ["docker", "commit", name, image_tag],
+                check=True, capture_output=True,
+            )
+            subprocess.run(["docker", "rm", name], capture_output=True)
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     return image_tag
 
