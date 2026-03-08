@@ -57,8 +57,8 @@ wheel_test!(test_orjson, "orjson", "import orjson; print(orjson.dumps({'a': 1}))
 wheel_test!(test_pydantic, "pydantic", "from pydantic import BaseModel; print('ok')");
 wheel_test!(test_rpds_py, "rpds-py", "import rpds; print(rpds.HashTrieMap({'a': 1}))");
 wheel_test!(test_regex, "regex", "import regex; print(regex.search(r'\\w+', 'hello').group())");
-// Note: psycopg (pure Python) requires libpq at runtime; use psycopg-binary instead
-wheel_test!(test_psycopg_binary, "psycopg-binary", "import psycopg; print('ok')");
+// Note: psycopg-binary provides C backend; psycopg[binary] installs both
+wheel_test!(test_psycopg_binary, "psycopg[binary]", "import psycopg; print('ok')");
 wheel_test!(test_aiohttp, "aiohttp", "import aiohttp; print(aiohttp.__version__)");
 wheel_test!(test_asyncpg, "asyncpg", "import asyncpg; print('ok')");
 wheel_test!(test_pynacl, "pynacl", "import nacl; print('ok')");
