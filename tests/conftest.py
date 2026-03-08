@@ -24,12 +24,22 @@ def _resolve_docker_env() -> dict:
         "ls -d /nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | sort | tail -1"
     ).read().strip()
     uv_bin = os.environ.get("UV_BIN", str(_PROJECT_ROOT / "uv" / "target" / "debug" / "uv"))
+
+    # Shared uv-nix cache dir so NixConfig + per-package resolutions persist
+    # across containers (avoids re-evaluating nixpkgs on every test).
+    uv_nix_cache = os.environ.get(
+        "XDG_CACHE_HOME",
+        str(Path.home() / ".cache"),
+    ) + "/uv-nix"
+    os.makedirs(uv_nix_cache, exist_ok=True)
+
     return {
         "uv_bin": uv_bin,
         "nix_bin_dir": str(Path(nix_bin).parent),
         "git_bin_dir": str(Path(git_bin).parent),
         "git_core_dir": git_core_dir,
         "ca_bundle": ca_bundle,
+        "uv_nix_cache": uv_nix_cache,
     }
 
 
@@ -53,6 +63,7 @@ def _base_docker_args(env: dict, image: str) -> list[str]:
         "-v", f"{env['nix_bin_dir']}:/nix-bin:ro",
         "-v", f"{env['git_bin_dir']}:/git-bin:ro",
         "-v", f"{env['git_core_dir']}:/git-core:ro",
+        "-v", f"{env['uv_nix_cache']}:/root/.cache/uv-nix",
         "-e", "PATH=/usr/local/bin:/usr/bin:/bin:/nix-bin:/git-bin",
         "-e", "NIX_REMOTE=daemon",
         "-e", f"NIX_SSL_CERT_FILE={env['ca_bundle']}",
@@ -162,6 +173,7 @@ def warmed_image() -> str:
                 "-v", f"{env['nix_bin_dir']}:/nix-bin:ro",
                 "-v", f"{env['git_bin_dir']}:/git-bin:ro",
                 "-v", f"{env['git_core_dir']}:/git-core:ro",
+                "-v", f"{env['uv_nix_cache']}:/root/.cache/uv-nix",
                 "-e", "PATH=/usr/local/bin:/usr/bin:/bin:/nix-bin:/git-bin",
                 "-e", "NIX_REMOTE=daemon",
                 "-e", f"NIX_SSL_CERT_FILE={env['ca_bundle']}",
