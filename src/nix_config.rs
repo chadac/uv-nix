@@ -12,7 +12,16 @@ use crate::nixpkgs;
 const DEFAULT_LIBS_JSON: &str = include_str!("../data/default-libs.json");
 
 /// Embedded per-Python-package build dependency registry.
-const PACKAGE_BUILD_LIBS_JSON: &str = include_str!("../data/package-build-libs.json");
+pub(crate) const PACKAGE_BUILD_LIBS_JSON: &str = include_str!("../data/package-build-libs.json");
+
+/// Per-package build dependency entry from package-build-libs.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PackageBuildEntry {
+    #[serde(default)]
+    pub libs: Vec<String>,
+    #[serde(default, rename = "build-tools")]
+    pub build_tools: Vec<String>,
+}
 
 /// All Nix paths needed at runtime, resolved from a single `nix-build` call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,14 +30,12 @@ pub struct NixConfig {
     pub interpreter: PathBuf,
     /// Colon-separated RPATH entries (runtime libs only, for patchelf).
     pub rpath: String,
-    /// Colon-separated library path (runtime + all package build deps, for LIBRARY_PATH).
+    /// Colon-separated library path (runtime + all package lib deps, for LIBRARY_PATH / RPATH patching).
     pub library_path: String,
-    /// Colon-separated include paths (runtime + all package build deps, for C_INCLUDE_PATH).
-    pub include_path: String,
-    /// Colon-separated pkg-config search paths (runtime + all package build deps).
-    pub pkg_config_path: String,
-    /// Colon-separated bin paths from package build deps (for PATH).
-    pub bin_path: String,
+    /// Path to stdenv.cc/bin (for PATH in build env).
+    pub cc_bin: String,
+    /// Path to coreutils/bin (for PATH in build env).
+    pub coreutils_bin: String,
     pub pkg_config: PathBuf,
 }
 
@@ -133,7 +140,7 @@ pub fn find_project_root(start: &Path) -> Option<PathBuf> {
 /// Compute a SHA-256 cache key from the nixpkgs key and both lib configs.
 fn compute_cache_key(nixpkgs_key: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"nix-config-v2\0");
+    hasher.update(b"nix-config-v3\0");
     hasher.update(nixpkgs_key.as_bytes());
     hasher.update(b"\0");
     hasher.update(DEFAULT_LIBS_JSON.as_bytes());
@@ -190,36 +197,40 @@ fn attr_resolve_expr(attr: &str) -> String {
     )
 }
 
-/// Collect all unique attrs from both default-libs.json and package-build-libs.json.
-fn collect_all_build_attrs() -> anyhow::Result<(Vec<String>, Vec<String>)> {
+/// Collect all unique lib attrs from both default-libs.json and package-build-libs.json.
+///
+/// Returns (runtime_attrs, all_lib_attrs). build-tools are excluded — they are
+/// resolved per-package on demand in build_env.rs.
+fn collect_all_lib_attrs() -> anyhow::Result<(Vec<String>, Vec<String>)> {
     // Runtime libs (plain list of attr strings)
     let runtime_attrs: Vec<String> = serde_json::from_str(DEFAULT_LIBS_JSON)?;
 
-    // Package build deps (map of package name → list of attr strings)
-    let package_map: std::collections::HashMap<String, Vec<String>> =
+    // Package build deps (map of package name → { libs, build-tools })
+    let package_map: std::collections::HashMap<String, PackageBuildEntry> =
         serde_json::from_str(PACKAGE_BUILD_LIBS_JSON)?;
 
-    // Union all build attrs (runtime + all package deps), deduplicated
-    let mut all_build_set: BTreeSet<String> = BTreeSet::new();
+    // Union all lib attrs (runtime + all package libs), deduplicated.
+    // build-tools are excluded — they're resolved per-package on demand.
+    let mut all_lib_set: BTreeSet<String> = BTreeSet::new();
     for attr in &runtime_attrs {
-        all_build_set.insert(attr.clone());
+        all_lib_set.insert(attr.clone());
     }
-    for attrs in package_map.values() {
-        for attr in attrs {
-            all_build_set.insert(attr.clone());
+    for entry in package_map.values() {
+        for attr in &entry.libs {
+            all_lib_set.insert(attr.clone());
         }
     }
 
-    let all_build_attrs: Vec<String> = all_build_set.into_iter().collect();
+    let all_lib_attrs: Vec<String> = all_lib_set.into_iter().collect();
 
-    Ok((runtime_attrs, all_build_attrs))
+    Ok((runtime_attrs, all_lib_attrs))
 }
 
 /// Run a single `nix-build -E` to resolve all config paths at once.
 fn build_nix_config(source: &nixpkgs::NixpkgsSource) -> anyhow::Result<NixConfig> {
     let pkgs_expr = nixpkgs::nixpkgs_import_expr(source);
 
-    let (runtime_attrs, all_build_attrs) = collect_all_build_attrs()?;
+    let (runtime_attrs, all_lib_attrs) = collect_all_lib_attrs()?;
 
     let runtime_exprs: String = runtime_attrs
         .iter()
@@ -227,7 +238,7 @@ fn build_nix_config(source: &nixpkgs::NixpkgsSource) -> anyhow::Result<NixConfig
         .collect::<Vec<_>>()
         .join("\n");
 
-    let build_exprs: String = all_build_attrs
+    let lib_exprs: String = all_lib_attrs
         .iter()
         .map(|a| format!("    {}", attr_resolve_expr(a)))
         .collect::<Vec<_>>()
@@ -239,20 +250,16 @@ fn build_nix_config(source: &nixpkgs::NixpkgsSource) -> anyhow::Result<NixConfig
   runtimeLibs = [
 {runtime_exprs}
   ];
-  allBuildLibs = [
-{build_exprs}
+  allLibs = [
+{lib_exprs}
   ];
 in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
   patchelf = "${{pkgs.patchelf}}/bin/patchelf";
   interpreter = pkgs.lib.strings.trim pkgs.stdenv.cc.bintools.dynamicLinker;
   rpath = pkgs.lib.makeLibraryPath runtimeLibs;
-  library_path = pkgs.lib.makeLibraryPath allBuildLibs;
-  include_path = builtins.concatStringsSep ":" (map (p: "${{pkgs.lib.getDev p}}/include") allBuildLibs);
-  pkg_config_path = builtins.concatStringsSep ":" (map (p: "${{pkgs.lib.getDev p}}/lib/pkgconfig") allBuildLibs);
-  bin_path = builtins.concatStringsSep ":" ([
-    "${{pkgs.stdenv.cc}}/bin"
-    "${{pkgs.coreutils}}/bin"
-  ] ++ (map (p: "${{pkgs.lib.getBin p}}/bin") allBuildLibs));
+  library_path = pkgs.lib.makeLibraryPath allLibs;
+  cc_bin = "${{pkgs.stdenv.cc}}/bin";
+  coreutils_bin = "${{pkgs.coreutils}}/bin";
   pkg_config = "${{pkgs.pkg-config}}/bin/pkg-config";
 }})"#
     );
@@ -330,9 +337,8 @@ mod tests {
             interpreter: PathBuf::from("/nix/store/yyy/lib/ld-linux-x86-64.so.2"),
             rpath: "/nix/store/aaa/lib:/nix/store/bbb/lib".to_string(),
             library_path: "/nix/store/aaa/lib:/nix/store/bbb/lib:/nix/store/ccc/lib".to_string(),
-            include_path: "/nix/store/aaa/include".to_string(),
-            pkg_config_path: "/nix/store/aaa/lib/pkgconfig".to_string(),
-            bin_path: "/nix/store/ccc/bin".to_string(),
+            cc_bin: "/nix/store/ccc/bin".to_string(),
+            coreutils_bin: "/nix/store/ddd/bin".to_string(),
             pkg_config: PathBuf::from("/nix/store/zzz/bin/pkg-config"),
         };
 
@@ -346,18 +352,21 @@ mod tests {
         assert_eq!(loaded.patchelf, config.patchelf);
         assert_eq!(loaded.rpath, config.rpath);
         assert_eq!(loaded.library_path, config.library_path);
-        assert_eq!(loaded.bin_path, config.bin_path);
+        assert_eq!(loaded.cc_bin, config.cc_bin);
+        assert_eq!(loaded.coreutils_bin, config.coreutils_bin);
     }
 
     #[test]
-    fn test_collect_all_build_attrs() {
-        let (runtime, all_build) = collect_all_build_attrs().unwrap();
+    fn test_collect_all_lib_attrs() {
+        let (runtime, all_libs) = collect_all_lib_attrs().unwrap();
         // Runtime should have default-libs entries
         assert!(runtime.contains(&"glibc".to_string()));
         assert!(runtime.contains(&"openssl".to_string()));
-        // All build should include runtime + package deps
-        assert!(all_build.len() >= runtime.len());
-        // Package-build-libs entries should be present
-        assert!(all_build.contains(&"libpq".to_string()));
+        // All libs should include runtime + package lib deps
+        assert!(all_libs.len() >= runtime.len());
+        // Package lib entries should be present
+        assert!(all_libs.contains(&"libpq".to_string()));
+        // Build-tool-only entries (cargo) should NOT be in all_libs
+        assert!(!all_libs.contains(&"cargo".to_string()));
     }
 }

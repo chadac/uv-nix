@@ -1,55 +1,179 @@
 {
-  "aiokafka": ["zlib"],
-  "av": ["ffmpeg_4"],
-  "bcrypt": ["libffi"],
-  "bjoern": ["libev"],
-  "borgbackup": ["openssl", "acl"],
-  "cffi": ["libffi"],
-  "coincurve": ["secp256k1"],
-  "confluent-kafka": ["rdkafka"],
-  "cryptography": ["openssl"],
-  "cysystemd": ["systemd"],
-  "dbus-python": ["dbus", "dbus-glib", "ncurses"],
-  "evdev": ["linuxHeaders"],
-  "grpcio": ["c-ares", "openssl", "zlib"],
-  "h5py": ["hdf5"],
-  "hidapi": ["libusb1"],
-  "imagecodecs": ["brotli", "bzip2", "c-blosc", "giflib", "lcms", "libjpeg_turbo", "libpng", "libtiff", "libwebp", "lz4", "openjpeg", "snappy", "zstd", "zlib"],
-  "jsonslicer": ["yajl"],
-  "kerberos": ["libkrb5"],
-  "lxml": ["libxml2", "libxslt", "zlib"],
-  "m2crypto": ["openssl"],
-  "mariadb": ["libmysqlclient"],
-  "matplotlib": ["libpng", "freetype", "cairo", "tcl", "tk"],
-  "mpi4py": ["mpi"],
-  "mysqlclient": ["libmysqlclient"],
-  "netcdf4": ["zlib", "netcdf", "hdf5", "curl", "libjpeg"],
-  "openexr": ["openexr"],
-  "pillow": ["freetype", "libjpeg", "zlib", "libtiff", "libwebp", "lcms2"],
-  "pillow-avif-plugin": ["libavif"],
-  "pillow-heif": ["libheif"],
-  "plyvel": ["leveldb"],
-  "psycopg2": ["libpq", "libpq.pg_config"],
-  "psycopg2-binary": ["libpq", "libpq.pg_config"],
-  "psycopg2cffi": ["libpq", "libpq.pg_config"],
-  "psycopg-c": ["libpq", "libpq.pg_config"],
-  "pycairo": ["cairo"],
-  "pycurl": ["curl"],
-  "pyfftw": ["fftw", "fftwFloat", "fftwLongDouble"],
-  "pyfuse3": ["fuse3"],
-  "pygame": ["SDL2", "SDL2_image", "SDL2_mixer", "SDL2_ttf", "libpng", "libjpeg", "portmidi", "freetype"],
-  "pygeos": ["geos"],
-  "pygobject3": ["cairo", "glib"],
-  "pymssql": ["openssl", "libkrb5", "freetds"],
-  "pyodbc": ["unixODBC"],
-  "pyproj": ["proj"],
-  "pysodium": ["libsodium"],
-  "pyzmq": ["libsodium", "zeromq"],
-  "reportlab": ["freetype", "libjpeg"],
-  "ruamel-yaml": ["libyaml"],
-  "ruamel-yaml-clib": ["libyaml"],
-  "scs": ["blas"],
-  "shapely": ["geos"],
-  "soundfile": ["libsndfile"],
-  "tables": ["hdf5", "c-blosc", "lz4", "zstd"]
+  "aiokafka": {
+    "libs": ["zlib"]
+  },
+  "av": {
+    "libs": ["ffmpeg_4"]
+  },
+  "bcrypt": {
+    "libs": ["libffi"],
+    "build-tools": ["cargo"]
+  },
+  "bjoern": {
+    "libs": ["libev"]
+  },
+  "borgbackup": {
+    "libs": ["openssl", "acl"]
+  },
+  "cffi": {
+    "libs": ["libffi"]
+  },
+  "coincurve": {
+    "libs": ["secp256k1"]
+  },
+  "confluent-kafka": {
+    "libs": ["rdkafka"]
+  },
+  "cryptography": {
+    "libs": ["openssl"],
+    "build-tools": ["cargo"]
+  },
+  "cysystemd": {
+    "libs": ["systemd"]
+  },
+  "dbus-python": {
+    "libs": ["dbus", "dbus-glib", "ncurses"]
+  },
+  "evdev": {
+    "libs": ["linuxHeaders"]
+  },
+  "grpcio": {
+    "libs": ["c-ares", "openssl", "zlib"]
+  },
+  "h5py": {
+    "libs": ["hdf5"]
+  },
+  "hidapi": {
+    "libs": ["libusb1"]
+  },
+  "imagecodecs": {
+    "libs": ["brotli", "bzip2", "c-blosc", "giflib", "lcms", "libjpeg_turbo", "libpng", "libtiff", "libwebp", "lz4", "openjpeg", "snappy", "zstd", "zlib"]
+  },
+  "jsonslicer": {
+    "libs": ["yajl"]
+  },
+  "kerberos": {
+    "libs": ["libkrb5"]
+  },
+  "lxml": {
+    "libs": ["libxml2", "libxslt", "zlib"]
+  },
+  "m2crypto": {
+    "libs": ["openssl"]
+  },
+  "mariadb": {
+    "libs": ["libmysqlclient"]
+  },
+  "matplotlib": {
+    "libs": ["libpng", "freetype", "cairo", "tcl", "tk"]
+  },
+  "mpi4py": {
+    "libs": ["mpi"]
+  },
+  "mysqlclient": {
+    "libs": ["libmysqlclient"]
+  },
+  "netcdf4": {
+    "libs": ["zlib", "netcdf", "hdf5", "curl", "libjpeg"]
+  },
+  "openexr": {
+    "libs": ["openexr"]
+  },
+  "orjson": {
+    "build-tools": ["cargo"]
+  },
+  "pillow": {
+    "libs": ["freetype", "libjpeg", "zlib", "libtiff", "libwebp", "lcms2"]
+  },
+  "pillow-avif-plugin": {
+    "libs": ["libavif"]
+  },
+  "pillow-heif": {
+    "libs": ["libheif"]
+  },
+  "plyvel": {
+    "libs": ["leveldb"]
+  },
+  "psycopg2": {
+    "libs": ["libpq"],
+    "build-tools": ["libpq.pg_config"]
+  },
+  "psycopg2-binary": {
+    "libs": ["libpq"],
+    "build-tools": ["libpq.pg_config"]
+  },
+  "psycopg2cffi": {
+    "libs": ["libpq"],
+    "build-tools": ["libpq.pg_config"]
+  },
+  "psycopg-c": {
+    "libs": ["libpq"],
+    "build-tools": ["libpq.pg_config"]
+  },
+  "pycairo": {
+    "libs": ["cairo"]
+  },
+  "pycurl": {
+    "libs": ["curl"]
+  },
+  "pydantic": {
+    "build-tools": ["cargo"]
+  },
+  "pyfftw": {
+    "libs": ["fftw", "fftwFloat", "fftwLongDouble"]
+  },
+  "pyfuse3": {
+    "libs": ["fuse3"]
+  },
+  "pygame": {
+    "libs": ["SDL2", "SDL2_image", "SDL2_mixer", "SDL2_ttf", "libpng", "libjpeg", "portmidi", "freetype"]
+  },
+  "pygeos": {
+    "libs": ["geos"]
+  },
+  "pygobject3": {
+    "libs": ["cairo", "glib"]
+  },
+  "pymssql": {
+    "libs": ["openssl", "libkrb5", "freetds"]
+  },
+  "pyodbc": {
+    "libs": ["unixODBC"]
+  },
+  "pyproj": {
+    "libs": ["proj"]
+  },
+  "pysodium": {
+    "libs": ["libsodium"]
+  },
+  "pyzmq": {
+    "libs": ["libsodium", "zeromq"]
+  },
+  "regex": {
+    "build-tools": ["cargo"]
+  },
+  "reportlab": {
+    "libs": ["freetype", "libjpeg"]
+  },
+  "rpds-py": {
+    "build-tools": ["cargo"]
+  },
+  "ruamel-yaml": {
+    "libs": ["libyaml"]
+  },
+  "ruamel-yaml-clib": {
+    "libs": ["libyaml"]
+  },
+  "scs": {
+    "libs": ["blas"]
+  },
+  "shapely": {
+    "libs": ["geos"]
+  },
+  "soundfile": {
+    "libs": ["libsndfile"]
+  },
+  "tables": {
+    "libs": ["hdf5", "c-blosc", "lz4", "zstd"]
+  }
 }

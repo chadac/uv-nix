@@ -51,18 +51,25 @@ fn nix_build_patched(
     let pkgs_expr = nixpkgs::nixpkgs_import_expr(source);
     let store_path_str = store_path.to_string_lossy();
 
-    // Collect all unique attrs (runtime + package build deps) so the patched
+    // Collect all unique lib attrs (runtime + package lib deps) so the patched
     // Python has all libs available via RPATH and the ctypes hook.
+    // build-tools (e.g. cargo) are excluded — they're only needed at build time.
     let runtime_attrs: Vec<String> = serde_json::from_str(DEFAULT_LIBS_JSON)?;
-    let package_map: std::collections::HashMap<String, Vec<String>> =
+
+    #[derive(serde::Deserialize)]
+    struct PkgEntry {
+        #[serde(default)]
+        libs: Vec<String>,
+    }
+    let package_map: std::collections::HashMap<String, PkgEntry> =
         serde_json::from_str(PACKAGE_BUILD_LIBS_JSON)?;
 
     let mut all_attrs = std::collections::BTreeSet::new();
     for attr in &runtime_attrs {
         all_attrs.insert(attr.clone());
     }
-    for attrs in package_map.values() {
-        for attr in attrs {
+    for entry in package_map.values() {
+        for attr in &entry.libs {
             all_attrs.insert(attr.clone());
         }
     }

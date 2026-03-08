@@ -16,9 +16,11 @@ from conftest import run_lib_test
 
 # --- Load package-build-libs.json ---
 _data_dir = Path(__file__).parent.parent / "data"
-_build_libs: dict[str, list[str]] = json.loads(
+_build_libs_raw: dict[str, dict] = json.loads(
     (_data_dir / "package-build-libs.json").read_text()
 )
+# Flatten to set of package names (the keys)
+_build_libs: dict[str, dict] = _build_libs_raw
 
 # --- Import checks ---
 IMPORT_CHECKS = {
@@ -92,11 +94,6 @@ SLOW_SOURCE_BUILDS = {
 
 SOURCE_ONLY = {"psycopg2", "mysqlclient", "mariadb"}
 
-# Packages that need Rust to build from source — skip source-build tests
-# (binary wheels work fine, just can't compile from source without rustc)
-NEEDS_RUST = {"bcrypt", "cryptography", "orjson", "pydantic", "rpds-py", "regex"}
-
-
 # --- Build test param lists ---
 _wheel_packages: list[str] = []
 for pkg in sorted(_build_libs.keys()):
@@ -129,7 +126,7 @@ SOURCE_BUILD_TESTS = [
         ),
     )
     for pkg in sorted(_build_libs.keys())
-    if pkg not in SKIP_PACKAGES and pkg not in SOURCE_ONLY and pkg not in NEEDS_RUST
+    if pkg not in SKIP_PACKAGES and pkg not in SOURCE_ONLY
 ]
 
 
