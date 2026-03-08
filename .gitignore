@@ -16,3 +16,6 @@ devenv.local.nix
 
 # Nix build output
 /result
+
+# Test cache (persistent Python installs across runs)
+/.cache

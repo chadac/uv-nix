@@ -154,28 +154,6 @@ NATIVE_PACKAGES = [
 ]
 
 
-@pytest.fixture(scope="module")
-def installed_python(
-    uv_binary: Path,
-    nix_available: bool,
-    tmp_path_factory: pytest.TempPathFactory,
-) -> tuple[Path, dict[str, str]]:
-    """Install Python 3.12 once, shared across all sync tests."""
-    if not nix_available:
-        pytest.skip("nix-build not available on PATH")
-
-    tmp_python_dir = tmp_path_factory.mktemp("python")
-    env = {"UV_PYTHON_INSTALL_DIR": str(tmp_python_dir)}
-
-    result = run_uv(uv_binary, ["python", "install", "3.12"], env_overrides=env)
-    assert result.returncode == 0, f"uv python install failed:\n{result.stderr}"
-
-    cpython_dir = find_cpython_dir(tmp_python_dir)
-    python_bin = cpython_dir / "bin" / "python3.12"
-    assert python_bin.exists()
-    return python_bin, env
-
-
 def _sync_package(
     uv_binary: Path,
     python_bin: Path,

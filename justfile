@@ -15,21 +15,24 @@ nix-build: sync-lockfile
 check:
     cargo check
 
+# Persistent test cache dir (Python install + nix config survive across runs)
+test-cache := ".cache/test"
+
 # Run tests inside a Docker container (isolated, no host side effects)
-test-fast: build
+test *ARGS="-m 'not docker and not slow'": build
     #!/usr/bin/env bash
     set -euo pipefail
 
     UV_BIN="$(pwd)/uv/target/debug/uv"
     NIX_BIN_DIR="$(dirname "$(readlink -f "$(which nix)")")"
     CA_BUNDLE="$(ls -d /nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | sort | tail -1)"
-    GIT_BIN="$(readlink -f "$(which git)")"
-    GIT_BIN_DIR="$(dirname "$GIT_BIN")"
+    GIT_BIN_DIR="$(dirname "$(readlink -f "$(which git)")")"
     GIT_CORE_DIR="$(git --exec-path)"
-    PYTEST_BIN="$(nix-shell -p python3 python3Packages.pytest --run 'which pytest')"
-    PYTEST_DIR="$(dirname "$(readlink -f "$PYTEST_BIN")")"
-    PYTHON_BIN="$(nix-shell -p python3 --run 'which python3')"
-    PYTHON_DIR="$(dirname "$(readlink -f "$PYTHON_BIN")")"
+    PYTEST_DIR="$(dirname "$(readlink -f "$(nix-shell -p python3 python3Packages.pytest --run 'which pytest')")")"
+    PYTHON_DIR="$(dirname "$(readlink -f "$(nix-shell -p python3 --run 'which python3')")")"
+
+    # Persistent cache for Python installs + nix config
+    mkdir -p "{{test-cache}}/python" "{{test-cache}}/uv-nix-config"
 
     docker run --rm \
         --workdir /work \
@@ -40,7 +43,10 @@ test-fast: build
         -v "$NIX_BIN_DIR:/nix-bin:ro" \
         -v "$GIT_BIN_DIR:/git-bin:ro" \
         -v "$GIT_CORE_DIR:/git-core:ro" \
+        -v "$(pwd)/{{test-cache}}/python:/tmp/uv-nix-test-python" \
+        -v "$(pwd)/{{test-cache}}/uv-nix-config:/root/.cache/uv-nix" \
         -e "UV_BIN=/usr/local/bin/uv" \
+        -e "UV_NIX_TEST_PYTHON_DIR=/tmp/uv-nix-test-python" \
         -e "PATH=/usr/local/bin:/usr/bin:/bin:/nix-bin:/git-bin:$PYTEST_DIR:$PYTHON_DIR" \
         -e "NIX_REMOTE=daemon" \
         -e "NIX_SSL_CERT_FILE=$CA_BUNDLE" \
@@ -48,42 +54,11 @@ test-fast: build
         -e "GIT_SSL_CAINFO=$CA_BUNDLE" \
         -e "GIT_EXEC_PATH=/git-core" \
         busybox \
-        pytest tests/ -v -x -m 'not docker and not slow'
+        pytest tests/ -v -x {{ARGS}}
 
-# Run all tests including slow ones
-test-all: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    UV_BIN="$(pwd)/uv/target/debug/uv"
-    NIX_BIN_DIR="$(dirname "$(readlink -f "$(which nix)")")"
-    CA_BUNDLE="$(ls -d /nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | sort | tail -1)"
-    GIT_BIN="$(readlink -f "$(which git)")"
-    GIT_BIN_DIR="$(dirname "$GIT_BIN")"
-    GIT_CORE_DIR="$(git --exec-path)"
-    PYTEST_BIN="$(nix-shell -p python3 python3Packages.pytest --run 'which pytest')"
-    PYTEST_DIR="$(dirname "$(readlink -f "$PYTEST_BIN")")"
-    PYTHON_BIN="$(nix-shell -p python3 --run 'which python3')"
-    PYTHON_DIR="$(dirname "$(readlink -f "$PYTHON_BIN")")"
-
-    docker run --rm \
-        --workdir /work \
-        --network host \
-        -v "$(pwd):/work:ro" \
-        -v "$UV_BIN:/usr/local/bin/uv:ro" \
-        -v "/nix:/nix" \
-        -v "$NIX_BIN_DIR:/nix-bin:ro" \
-        -v "$GIT_BIN_DIR:/git-bin:ro" \
-        -v "$GIT_CORE_DIR:/git-core:ro" \
-        -e "UV_BIN=/usr/local/bin/uv" \
-        -e "PATH=/usr/local/bin:/usr/bin:/bin:/nix-bin:/git-bin:$PYTEST_DIR:$PYTHON_DIR" \
-        -e "NIX_REMOTE=daemon" \
-        -e "NIX_SSL_CERT_FILE=$CA_BUNDLE" \
-        -e "SSL_CERT_FILE=$CA_BUNDLE" \
-        -e "GIT_SSL_CAINFO=$CA_BUNDLE" \
-        -e "GIT_EXEC_PATH=/git-core" \
-        busybox \
-        pytest tests/ -v -x
+# Clear persistent test cache (forces re-download of Python etc.)
+test-clean:
+    rm -rf {{test-cache}}
 
 # Spawn an interactive Docker container with uv + nix on PATH
 # Usage: just docker [image]
@@ -94,8 +69,7 @@ docker image="busybox": build
     UV_BIN="$(pwd)/uv/target/debug/uv"
     NIX_BIN_DIR="$(dirname "$(readlink -f "$(which nix)")")"
     CA_BUNDLE="$(ls -d /nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | sort | tail -1)"
-    GIT_BIN="$(readlink -f "$(which git)")"
-    GIT_BIN_DIR="$(dirname "$GIT_BIN")"
+    GIT_BIN_DIR="$(dirname "$(readlink -f "$(which git)")")"
     GIT_CORE_DIR="$(git --exec-path)"
 
     exec docker run --rm -it \
