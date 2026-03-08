@@ -12,7 +12,8 @@ build-backend = "setuptools.build_meta"
 testpaths = ["."]
 markers = [
     "docker: tests that require Docker",
-    "slow: large packages that take a long time to install (pandas, scipy)",
+    "slow: large packages that take a long time to install",
+    "source_build: tests that build packages from source (--no-binary)",
 ]
 
 [project.optional-dependencies]
