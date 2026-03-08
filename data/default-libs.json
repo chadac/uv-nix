@@ -16,7 +16,6 @@
     "util-linux.out"
   ],
   "darwin": [
-    "libiconv",
-    "darwin.libobjc"
+    "libiconv"
   ]
 }
