@@ -32,6 +32,10 @@ jobs:
 
       - uses: DeterminateSystems/determinate-nix-action@v3
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "uv -> target"
+
       - name: Build patched uv
         run: nix develop --command just build
 
@@ -52,6 +56,10 @@ jobs:
           submodules: recursive
 
       - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "uv -> target"
 
       - name: Build patched uv
         run: nix develop --command just build
