@@ -117,6 +117,7 @@ You can override this with an explicit flake reference:
 ```toml
 [tool.uv-nix]
 nixpkgs = "github:NixOS/nixpkgs/nixos-24.11"
+```
 
 ### Per-package configuration
 
