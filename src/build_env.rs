@@ -199,15 +199,9 @@ fn build_effective_entry(
 
     // Apply custom config additions
     if let Some(custom) = custom_config {
-        // Add extra libraries
-        libs.extend(custom.extra_libraries.clone());
-
-        // Add platform-specific extra libraries
-        if is_darwin {
-            libs.extend(custom.extra_darwin_libraries.clone());
-        } else {
-            libs.extend(custom.extra_linux_libraries.clone());
-        }
+        // Add extra libraries (filtered by platform)
+        let system = if is_darwin { "aarch64-darwin" } else { "x86_64-linux" };
+        libs.extend(custom.extra_libraries_for_system(system));
 
         // Add extra build tools
         build_tools.extend(custom.extra_build_tools.clone());
@@ -338,13 +332,21 @@ fn resolve_extra_build_paths() -> Option<nixpkgs::ResolvedBuildPaths> {
     let cwd = env::current_dir().ok()?;
     let (uv_nix_config, project_dir) = crate::config::find_config(&cwd)?;
 
-    if uv_nix_config.extra_libraries.is_empty() {
+    // Get libraries filtered for current system
+    let system = if cfg!(target_os = "macos") {
+        "aarch64-darwin"
+    } else {
+        "x86_64-linux"
+    };
+    let libs = uv_nix_config.extra_libraries_for_system(system);
+
+    if libs.is_empty() {
         return None;
     }
 
     debug!(
         "Found {} extra libraries for build env",
-        uv_nix_config.extra_libraries.len()
+        libs.len()
     );
 
     let source = nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config);
@@ -352,7 +354,7 @@ fn resolve_extra_build_paths() -> Option<nixpkgs::ResolvedBuildPaths> {
 
     // Check cache first
     let cache_key = format!("build-paths:{nix_key}");
-    if let Some(cached) = crate::cache::lookup(&project_dir, &cache_key, &uv_nix_config.extra_libraries) {
+    if let Some(cached) = crate::cache::lookup(&project_dir, &cache_key, &libs) {
         // Cached value is JSON-serialized ResolvedBuildPaths
         if let Ok(paths) = serde_json::from_str::<nixpkgs::ResolvedBuildPaths>(&cached) {
             return Some(paths);
@@ -360,8 +362,8 @@ fn resolve_extra_build_paths() -> Option<nixpkgs::ResolvedBuildPaths> {
     }
 
     // Cache miss — resolve via nix-build
-    debug!("Resolving build paths for {:?}", uv_nix_config.extra_libraries);
-    match nixpkgs::resolve_build_paths(&uv_nix_config.extra_libraries, &source) {
+    debug!("Resolving build paths for {:?}", libs);
+    match nixpkgs::resolve_build_paths(&libs, &source) {
         Ok(paths) => {
             debug!("Resolved build paths: {:?}", paths);
             // Cache as JSON
@@ -369,7 +371,7 @@ fn resolve_extra_build_paths() -> Option<nixpkgs::ResolvedBuildPaths> {
                 if let Err(err) = crate::cache::store(
                     &project_dir,
                     &cache_key,
-                    &uv_nix_config.extra_libraries,
+                    &libs,
                     &json,
                 ) {
                     warn!("Failed to cache resolved build paths: {err}");
@@ -387,6 +389,7 @@ fn resolve_extra_build_paths() -> Option<nixpkgs::ResolvedBuildPaths> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LibrarySpec;
 
     #[test]
     fn test_prepend_env_empty() {
@@ -460,7 +463,7 @@ mod tests {
     fn test_build_effective_entry_extra_libs() {
         let custom = PackageConfig {
             name: "psycopg2".to_string(),
-            extra_libraries: vec!["openssl".to_string()],
+            extra_libraries: vec![LibrarySpec::all_platforms("openssl")],
             extra_build_tools: vec!["cmake".to_string()],
             ..Default::default()
         };

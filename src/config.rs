@@ -1,7 +1,88 @@
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::debug;
+
+/// A library specification that can be either a simple string or an object with platform filters.
+///
+/// Supports two formats in TOML:
+/// - Simple string: `"libGL"` (applies to all platforms)
+/// - Object with platforms: `{ pkg = "libdrm", platforms = ["*-linux"] }`
+///
+/// Platform patterns support:
+/// - Exact match: `"x86_64-linux"`, `"aarch64-darwin"`
+/// - Wildcard prefix: `"*-linux"`, `"*-darwin"`
+#[derive(Debug, Clone, Serialize)]
+pub struct LibrarySpec {
+    /// The nixpkgs attribute path for the library.
+    pub pkg: String,
+    /// Platform patterns this library applies to. Empty means all platforms.
+    pub platforms: Vec<String>,
+}
+
+impl LibrarySpec {
+    /// Create a new library spec that applies to all platforms.
+    pub fn all_platforms(pkg: impl Into<String>) -> Self {
+        Self {
+            pkg: pkg.into(),
+            platforms: vec![],
+        }
+    }
+
+    /// Create a new library spec with specific platform filters.
+    pub fn with_platforms(pkg: impl Into<String>, platforms: Vec<String>) -> Self {
+        Self {
+            pkg: pkg.into(),
+            platforms,
+        }
+    }
+
+    /// Check if this library applies to the given system (e.g., "x86_64-linux").
+    pub fn matches_system(&self, system: &str) -> bool {
+        if self.platforms.is_empty() {
+            return true;
+        }
+        self.platforms.iter().any(|pattern| {
+            if pattern.starts_with("*-") {
+                // Wildcard pattern like "*-linux" or "*-darwin"
+                let suffix = &pattern[1..]; // "-linux" or "-darwin"
+                system.ends_with(suffix)
+            } else {
+                // Exact match
+                pattern == system
+            }
+        })
+    }
+
+    /// Check if this library applies to Linux systems.
+    pub fn matches_linux(&self) -> bool {
+        self.matches_system("x86_64-linux") || self.matches_system("aarch64-linux")
+    }
+
+    /// Check if this library applies to Darwin systems.
+    pub fn matches_darwin(&self) -> bool {
+        self.matches_system("x86_64-darwin") || self.matches_system("aarch64-darwin")
+    }
+}
+
+impl<'de> Deserialize<'de> for LibrarySpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum LibrarySpecHelper {
+            Simple(String),
+            Full { pkg: String, platforms: Vec<String> },
+        }
+
+        match LibrarySpecHelper::deserialize(deserializer)? {
+            LibrarySpecHelper::Simple(pkg) => Ok(LibrarySpec::all_platforms(pkg)),
+            LibrarySpecHelper::Full { pkg, platforms } => Ok(LibrarySpec::with_platforms(pkg, platforms)),
+        }
+    }
+}
 
 /// Per-package build configuration from `[[tool.uv-nix.package]]`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -19,18 +100,19 @@ pub struct PackageConfig {
     pub libraries: Vec<String>,
 
     /// Extra libraries to add to defaults.
+    /// Supports both strings and objects with platform filters.
     #[serde(default)]
-    pub extra_libraries: Vec<String>,
+    pub extra_libraries: Vec<LibrarySpec>,
 
     /// Extra build tools (e.g., cargo, cmake).
     #[serde(default)]
     pub extra_build_tools: Vec<String>,
 
-    /// Linux-only extra libraries.
+    /// Linux-only extra libraries (deprecated, use platform filters in extra-libraries).
     #[serde(default)]
     pub extra_linux_libraries: Vec<String>,
 
-    /// Darwin-only extra libraries.
+    /// Darwin-only extra libraries (deprecated, use platform filters in extra-libraries).
     #[serde(default)]
     pub extra_darwin_libraries: Vec<String>,
 }
@@ -45,6 +127,26 @@ impl PackageConfig {
             || !self.extra_linux_libraries.is_empty()
             || !self.extra_darwin_libraries.is_empty()
     }
+
+    /// Get extra libraries filtered for a specific system.
+    pub fn extra_libraries_for_system(&self, system: &str) -> Vec<String> {
+        let mut libs: Vec<String> = self
+            .extra_libraries
+            .iter()
+            .filter(|spec| spec.matches_system(system))
+            .map(|spec| spec.pkg.clone())
+            .collect();
+
+        // Also include deprecated platform-specific fields
+        let is_darwin = system.ends_with("-darwin");
+        if is_darwin {
+            libs.extend(self.extra_darwin_libraries.clone());
+        } else {
+            libs.extend(self.extra_linux_libraries.clone());
+        }
+
+        libs
+    }
 }
 
 /// The `[tool.uv-nix]` section from pyproject.toml.
@@ -52,8 +154,9 @@ impl PackageConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct UvNixConfig {
     /// Extra nixpkgs attr paths to include in RPATH (additive to defaults).
+    /// Supports both strings and objects with platform filters.
     #[serde(default)]
-    pub extra_libraries: Vec<String>,
+    pub extra_libraries: Vec<LibrarySpec>,
 
     /// Optional explicit nixpkgs pin (overrides auto-detection).
     pub nixpkgs: Option<String>,
@@ -74,6 +177,23 @@ impl UvNixConfig {
         !self.extra_libraries.is_empty()
             || self.nixpkgs.is_some()
             || !self.packages.is_empty()
+    }
+
+    /// Get extra libraries filtered for a specific system.
+    pub fn extra_libraries_for_system(&self, system: &str) -> Vec<String> {
+        self.extra_libraries
+            .iter()
+            .filter(|spec| spec.matches_system(system))
+            .map(|spec| spec.pkg.clone())
+            .collect()
+    }
+
+    /// Get all library pkg names (for cache key generation).
+    pub fn extra_library_names(&self) -> Vec<String> {
+        self.extra_libraries
+            .iter()
+            .map(|spec| spec.pkg.clone())
+            .collect()
     }
 }
 
@@ -154,7 +274,8 @@ extra-libraries = ["libGL", "cudaPackages.cudatoolkit"]
         .unwrap();
 
         let (config, project_dir) = find_config(dir.path()).unwrap();
-        assert_eq!(config.extra_libraries, vec!["libGL", "cudaPackages.cudatoolkit"]);
+        let lib_pkgs: Vec<&str> = config.extra_libraries.iter().map(|l| l.pkg.as_str()).collect();
+        assert_eq!(lib_pkgs, vec!["libGL", "cudaPackages.cudatoolkit"]);
         assert!(config.nixpkgs.is_none());
         assert_eq!(project_dir, dir.path());
     }
@@ -174,7 +295,8 @@ nixpkgs = "github:NixOS/nixpkgs/nixos-24.11"
         .unwrap();
 
         let (config, _) = find_config(dir.path()).unwrap();
-        assert_eq!(config.extra_libraries, vec!["libGL"]);
+        assert_eq!(config.extra_libraries.len(), 1);
+        assert_eq!(config.extra_libraries[0].pkg, "libGL");
         assert_eq!(
             config.nixpkgs.as_deref(),
             Some("github:NixOS/nixpkgs/nixos-24.11")
@@ -247,7 +369,8 @@ extra-linux-libraries = ["cuda"]
         let numpy = config.get_package_config("numpy").unwrap();
         assert!(numpy.nixpkgs.is_none());
         assert!(numpy.libraries.is_empty());
-        assert_eq!(numpy.extra_libraries, vec!["mkl"]);
+        assert_eq!(numpy.extra_libraries.len(), 1);
+        assert_eq!(numpy.extra_libraries[0].pkg, "mkl");
         assert_eq!(numpy.extra_linux_libraries, vec!["cuda"]);
         assert!(numpy.has_overrides());
 
@@ -274,5 +397,61 @@ extra-libraries = ["libheif"]
         assert!(config.extra_libraries.is_empty());
         assert_eq!(config.packages.len(), 1);
         assert!(config.has_config());
+    }
+
+    #[test]
+    fn test_library_spec_with_platforms() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("pyproject.toml");
+        fs::write(
+            &toml_path,
+            r#"
+[tool.uv-nix]
+extra-libraries = [
+    "libGL",
+    { pkg = "libdrm", platforms = ["*-linux"] },
+    { pkg = "darwin.apple_sdk.frameworks.Accelerate", platforms = ["*-darwin"] },
+    { pkg = "cudaPackages.cudatoolkit", platforms = ["x86_64-linux"] },
+]
+"#,
+        )
+        .unwrap();
+
+        let (config, _) = find_config(dir.path()).unwrap();
+        assert_eq!(config.extra_libraries.len(), 4);
+
+        // libGL applies to all platforms
+        let linux_libs = config.extra_libraries_for_system("x86_64-linux");
+        assert!(linux_libs.contains(&"libGL".to_string()));
+        assert!(linux_libs.contains(&"libdrm".to_string()));
+        assert!(linux_libs.contains(&"cudaPackages.cudatoolkit".to_string()));
+        assert!(!linux_libs.contains(&"darwin.apple_sdk.frameworks.Accelerate".to_string()));
+
+        let darwin_libs = config.extra_libraries_for_system("aarch64-darwin");
+        assert!(darwin_libs.contains(&"libGL".to_string()));
+        assert!(darwin_libs.contains(&"darwin.apple_sdk.frameworks.Accelerate".to_string()));
+        assert!(!darwin_libs.contains(&"libdrm".to_string()));
+        assert!(!darwin_libs.contains(&"cudaPackages.cudatoolkit".to_string()));
+
+        // aarch64-linux should get libdrm but not cuda (x86_64 only)
+        let aarch64_linux_libs = config.extra_libraries_for_system("aarch64-linux");
+        assert!(aarch64_linux_libs.contains(&"libdrm".to_string()));
+        assert!(!aarch64_linux_libs.contains(&"cudaPackages.cudatoolkit".to_string()));
+    }
+
+    #[test]
+    fn test_library_spec_matches_system() {
+        let all_platforms = LibrarySpec::all_platforms("libGL");
+        assert!(all_platforms.matches_system("x86_64-linux"));
+        assert!(all_platforms.matches_system("aarch64-darwin"));
+
+        let linux_only = LibrarySpec::with_platforms("libdrm", vec!["*-linux".to_string()]);
+        assert!(linux_only.matches_system("x86_64-linux"));
+        assert!(linux_only.matches_system("aarch64-linux"));
+        assert!(!linux_only.matches_system("aarch64-darwin"));
+
+        let x86_only = LibrarySpec::with_platforms("cuda", vec!["x86_64-linux".to_string()]);
+        assert!(x86_only.matches_system("x86_64-linux"));
+        assert!(!x86_only.matches_system("aarch64-linux"));
     }
 }

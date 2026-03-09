@@ -79,16 +79,29 @@ extra-libraries = [
     "libGL",                      # For OpenGL support (PyOpenGL, etc.)
     "cudaPackages.cudatoolkit",   # For CUDA support
     "ffmpeg",                     # For audio/video processing
+    # Platform-specific libraries use object syntax:
+    { pkg = "libdrm", platforms = ["*-linux"] },
+    { pkg = "darwin.apple_sdk.frameworks.Metal", platforms = ["*-darwin"] },
 ]
 
-# Optional: Pin to a specific nixpkgs version (overrides auto-detection)
-nixpkgs = "github:NixOS/nixpkgs/nixos-24.11"
+# Optional: Pin to a specific nixpkgs commit (overrides auto-detection)
+nixpkgs = "github:NixOS/nixpkgs/a3c0b3b21515f74fd2665903d4ce6f4d83838dde"
 ```
 
 #### `extra-libraries`
 
 A list of nixpkgs attribute paths to include when patching binaries
-and during source builds. These libraries will be:
+and during source builds. Each entry can be:
+
+- A simple string (e.g., `"libGL"`) - applies to all platforms
+- An object with `pkg` and `platforms` fields for platform-specific libraries
+
+Platform patterns:
+- `"*-linux"` - matches all Linux systems (x86_64-linux, aarch64-linux)
+- `"*-darwin"` - matches all macOS systems (aarch64-darwin, x86_64-darwin)
+- `"x86_64-linux"` - matches only that specific system
+
+These libraries will be:
 
 1. Added to RPATH when patching `.so` files in wheels
 2. Added to `LIBRARY_PATH`, `C_INCLUDE_PATH`, and `PKG_CONFIG_PATH`
@@ -104,7 +117,6 @@ Common examples:
 | `libpq` | PostgreSQL support (psycopg2) |
 | `openssl` | SSL/TLS support |
 | `zlib` | Compression support |
-
 #### `nixpkgs`
 
 By default, uv-nix auto-detects your nixpkgs from:
@@ -116,7 +128,7 @@ You can override this with an explicit flake reference:
 
 ```toml
 [tool.uv-nix]
-nixpkgs = "github:NixOS/nixpkgs/nixos-24.11"
+nixpkgs = "github:NixOS/nixpkgs/a3c0b3b21515f74fd2665903d4ce6f4d83838dde"
 ```
 
 ### Per-package configuration
@@ -131,16 +143,18 @@ name = "psycopg2"
 libraries = ["postgresql_17"]
 # Add extra build tools for source builds
 extra-build-tools = ["gcc"]
-# Use a different nixpkgs pin for this package
-nixpkgs = "github:NixOS/nixpkgs/nixos-24.11"
-
+# Pin to a specific nixpkgs commit for this package
+nixpkgs = "github:NixOS/nixpkgs/a3c0b3b21515f74fd2665903d4ce6f4d83838dde"
 [[tool.uv-nix.package]]
 name = "pillow"
 # Add libraries on top of defaults (from package-build-libs.json)
-extra-libraries = ["libheif", "libavif"]
-# Platform-specific libraries
-extra-linux-libraries = ["libdrm"]
-extra-darwin-libraries = ["darwin.apple_sdk.frameworks.Accelerate"]
+extra-libraries = [
+  "libheif",
+  "libavif",
+  # Platform-specific libraries use object syntax with platforms filter
+  { pkg = "libdrm", platforms = ["*-linux"] },
+  { pkg = "darwin.apple_sdk.frameworks.Accelerate", platforms = ["*-darwin"] },
+]
 ```
 
 #### Per-package options
@@ -149,10 +163,8 @@ extra-darwin-libraries = ["darwin.apple_sdk.frameworks.Accelerate"]
 |--------|-------------|
 | `name` | Package name (required) |
 | `libraries` | Replace default libraries entirely |
-| `extra-libraries` | Add libraries to defaults |
+| `extra-libraries` | Add libraries to defaults (string or `{pkg, platforms}` object) |
 | `extra-build-tools` | Additional build tools (cargo, cmake, etc.) |
-| `extra-linux-libraries` | Linux-only additional libraries |
-| `extra-darwin-libraries` | macOS-only additional libraries |
 | `nixpkgs` | Per-package nixpkgs override |
 
 #### Viewing package configuration

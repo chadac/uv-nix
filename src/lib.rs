@@ -94,17 +94,27 @@ fn resolve_extra_libraries(start: &Path) -> Option<String> {
     let source = nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config);
     let nix_key = nixpkgs::nixpkgs_cache_key(&source);
 
+    // Get library names for the current system
+    let system = if cfg!(target_os = "macos") {
+        "aarch64-darwin"
+    } else {
+        "x86_64-linux"
+    };
+    let libs = uv_nix_config.extra_libraries_for_system(system);
+
+    if libs.is_empty() {
+        return None;
+    }
+
     // Check cache first
-    if let Some(cached) = cache::lookup(&project_dir, &nix_key, &uv_nix_config.extra_libraries) {
+    if let Some(cached) = cache::lookup(&project_dir, &nix_key, &libs) {
         return Some(cached);
     }
 
     // Cache miss — resolve via nix eval
-    match nixpkgs::resolve_library_paths(&uv_nix_config.extra_libraries, &source) {
+    match nixpkgs::resolve_library_paths(&libs, &source) {
         Ok(paths) => {
-            if let Err(err) =
-                cache::store(&project_dir, &nix_key, &uv_nix_config.extra_libraries, &paths)
-            {
+            if let Err(err) = cache::store(&project_dir, &nix_key, &libs, &paths) {
                 warn!("Failed to cache resolved library paths: {err}");
             }
             Some(paths)
