@@ -67,9 +67,12 @@
                  };
                };
 
+          # Helper to convert version dots to dashes for attribute names
+          versionToAttr = v: builtins.replaceStrings ["."] ["-"] v;
+
           # Generate packages for all source versions
           sourcePackages = builtins.listToAttrs (map (v: {
-            name = "build-${v.version}";
+            name = "build-${versionToAttr v.version}";
             value = mkSourceBuild v;
           }) sources.all);
 
@@ -77,7 +80,7 @@
           binaryPackages = builtins.listToAttrs (
             builtins.filter (x: x.value != null) (
               map (version: {
-                name = "bin-${version}";
+                name = "bin-${versionToAttr version}";
                 value = mkBinaryPackage version;
               }) binSources.allVersions
             )

@@ -32,17 +32,17 @@ let
       cp -r ${uvNixSrc}/data/* $sourceRoot/crates/uv-nix/data/
     '';
 
+    # Add uv-nix to workspace BEFORE patches (which reference it)
+    prePatch = ''
+      # Insert uv-nix into [workspace.dependencies] after uv-normalize (version-agnostic)
+      sed -i '/^uv-normalize = /a uv-nix = { version = "0.0.1", path = "crates/uv-nix" }' Cargo.toml
+    '';
     patches = [
-      "${uvNixSrc}/patches/01-workspace-add-uv-nix.patch"
       "${uvNixSrc}/patches/02-uv-cli-nix-commands.patch"
       "${uvNixSrc}/patches/03-uv-crate-nix-dispatch.patch"
       "${uvNixSrc}/patches/04-uv-python-nix-hook.patch"
       "${uvNixSrc}/patches/05-uv-dispatch-nix-build-env.patch"
     ];
-
-    postPatch = ''
-      cp ${uvNixSrc}/Cargo.lock Cargo.lock
-    '';
 
     installPhase = ''
       cp -r . $out
@@ -56,7 +56,7 @@ in rustPlatform.buildRustPackage {
   src = patchedSrc;
 
   cargoLock = {
-    lockFile = "${uvNixSrc}/Cargo.lock";
+    lockFile = "${patchedSrc}/Cargo.lock";
   };
 
   buildInputs = [
