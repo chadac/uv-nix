@@ -7,9 +7,13 @@
       url = "github:astral-sh/uv/0.10.8";
       flake = false;
     };
+    cached-exec = {
+      url = "github:chadac/cached-exec";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, uv-src }:
+  outputs = { self, nixpkgs, uv-src, cached-exec }:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
@@ -111,6 +115,8 @@
               pkgs.zstd
               pkgs.openssl
               pkgs.pkg-config
+              # Dev tools
+              cached-exec.packages.${system}.default
             ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
               pkgs.apple-sdk
               pkgs.libiconv

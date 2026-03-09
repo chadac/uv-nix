@@ -10,6 +10,7 @@
     pkgs.python3Packages.docker
     pkgs.binutils  # provides readelf for test assertions
     pkgs.just
+    inputs.cached-exec.packages.${pkgs.system}.default
   ];
 
   # https://devenv.sh/languages/

@@ -1,7 +1,30 @@
 # Build the patched uv binary using cargo (fast, for development)
 build:
     bash scripts/apply-patches.sh
-    cd uv && cargo build --package uv --no-default-features --features "uv-distribution/static,test-defaults"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cached-exec \
+        Cargo.toml \
+        $(find src/ -type f) \
+        $(find data/ -type f) \
+        $(find patches/ -type f -name '*.patch') \
+        .git/modules/uv/HEAD \
+        -- \
+        cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
+
+# Force rebuild (ignores cache)
+build-force:
+    bash scripts/apply-patches.sh
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cached-exec -f \
+        Cargo.toml \
+        $(find src/ -type f) \
+        $(find data/ -type f) \
+        $(find patches/ -type f -name '*.patch') \
+        .git/modules/uv/HEAD \
+        -- \
+        cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
 
 # Copy the full workspace Cargo.lock (needed before nix build)
 sync-lockfile:
@@ -19,13 +42,12 @@ check:
 # Test commands (Rust-based)
 # =============================================================================
 
-# Run fast wheel install tests
+# Run wheel install tests (wheel-only packages auto-skip if no wheel available)
 test: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --test-threads=4
 
-# Run all wheel tests including slow ones
-test-all: build
-    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --include-ignored --test-threads=4
+# Alias for backward compatibility (all tests now run by default, with auto-skip)
+test-all: test
 
 # Run source build tests (slow)
 test-source: build
