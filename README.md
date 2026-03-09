@@ -2,17 +2,20 @@
 
 Patch for uv for hassle-free venv management using Nix.
 
-Folks who use `uv` with Nix development environments know... it's not
-exactly perfect. Problem is that most folks want to use `uv` directly
-for its speed, but builds don't play very well with Nix by default.
+Using `uv` with Nix dev envs (or just Python in general) can be a
+hassle when using libraries that depend on system packages. Nix can
+solve this, but tools like
+[uv2nix](https://github.com/pyproject-nix/uv2nix) replace `uv` rather
+than layering on top -- which means you lose some of the speed
+advantages.
 
-This fixes that by patching `uv` with Nix-aware builds. Features:
+This project patches `uv` to Nix-aware by:
 
-* Patches the Python binaries that `uv` provides:
+* Patching the Python binaries that `uv` provides:
   * Libraries like `zlib` and such use Nix-provided versions
-  * It also does some patching so that `ctypes` `find_library()` and
-    such prefer Nix libraries
-* Patches Python wheels with patchelf to link directly to Nix-supplied
+  * It also hooks up the `ctypes` module with uv-nix so `find_library`
+    and such work
+* Patching Python wheels with patchelf to link directly to Nix-supplied
   libraries. No need for `LD_LIBRARY_PATH` hacks.
 * It also updates source builds to use Nix libraries (TODO is to make
   source/wheel builds pure derivations if desired as well)
@@ -20,6 +23,9 @@ This fixes that by patching `uv` with Nix-aware builds. Features:
 These all are sourced preferentially from your
 `flake.nix`/devenv/flox/devbox configurations as well if you have
 them.
+
+*WARNING: USE AT YOUR OWN RISK!* Since this is patching `uv`, it means
+that it could at any time break.
 
 ## Installation
 
