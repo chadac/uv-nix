@@ -1,90 +1,127 @@
-name: Build Artifacts
+name: Publish Artifacts
 
 on:
+  # Trigger after Garnix builds complete (via check_suite)
+  check_suite:
+    types: [completed]
+  # Manual trigger
+  workflow_dispatch:
+  # Also trigger on tags for releases
   push:
-    branches:
-      - main
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'UV version to build (e.g., 0.10.9)'
-        required: false
-        type: string
 
-# Explicitly exclude PRs - only run on push to main/tags
+# Explicitly exclude PRs - only run on main branch
 # PRs will not trigger this workflow
 
 jobs:
-  build-linux:
+  # Wait for Garnix to complete before publishing
+  wait-for-garnix:
+    # Only run on main branch or tags, and only if check_suite is from Garnix
+    if: |
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'check_suite' && 
+       github.event.check_suite.app.slug == 'garnix-ci' &&
+       github.event.check_suite.conclusion == 'success' &&
+       github.event.check_suite.head_branch == 'main')
+    runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.check.outputs.should_publish }}
+    steps:
+      - name: Check if we should publish
+        id: check
+        run: |
+          echo "should_publish=true" >> $GITHUB_OUTPUT
+          echo "Garnix build completed successfully, proceeding to publish artifacts"
+
+  # Fetch artifacts from Garnix cache and publish
+  publish-linux:
+    needs: wait-for-garnix
+    if: needs.wait-for-garnix.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        package:
-          - build-0-10-9
-          - build-0-10-8
-          - build-0-10-7
+        version:
+          - "0.10.9"
+          - "0.10.8"
+          - "0.10.7"
+          - "0.10.6"
+          - "0.10.5"
     steps:
       - uses: actions/checkout@v4
 
       - uses: DeterminateSystems/determinate-nix-action@v3
 
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
-
-      - name: Build ${{ matrix.package }}
+      - name: Configure Garnix cache
         run: |
-          nix build .#${{ matrix.package }} --out-link result
+          # Add Garnix as a substituter to pull cached builds
+          echo "extra-substituters = https://cache.garnix.io" | sudo tee -a /etc/nix/nix.conf
+          echo "extra-trusted-public-keys = cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=" | sudo tee -a /etc/nix/nix.conf
 
-      - name: Get package info
-        id: pkg-info
+      - name: Fetch build-${{ matrix.version }} from cache
+        id: fetch
         run: |
-          VERSION=$(./result/bin/uv --version | awk '{print $2}')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          VERSION_ATTR=$(echo "${{ matrix.version }}" | tr '.' '-')
+          echo "Building/fetching packages.x86_64-linux.build-${VERSION_ATTR}"
+          nix build .#build-${VERSION_ATTR} --out-link result
+          
+          # Extract version from binary
+          ACTUAL_VERSION=$(./result/bin/uv --version | awk '{print $2}')
+          echo "version=$ACTUAL_VERSION" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: uv-nix-${{ steps.pkg-info.outputs.version }}-linux-x86_64
+          name: uv-nix-${{ steps.fetch.outputs.version }}-linux-x86_64
           path: result/bin/uv
-          retention-days: 30
+          retention-days: 90
 
-  build-macos:
+  publish-macos:
+    needs: wait-for-garnix
+    if: needs.wait-for-garnix.outputs.should_publish == 'true'
     runs-on: macos-latest
     strategy:
       matrix:
-        package:
-          - build-0-10-9
-          - build-0-10-8
-          - build-0-10-7
+        version:
+          - "0.10.9"
+          - "0.10.8"
+          - "0.10.7"
+          - "0.10.6"
+          - "0.10.5"
     steps:
       - uses: actions/checkout@v4
 
       - uses: DeterminateSystems/determinate-nix-action@v3
 
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
-
-      - name: Build ${{ matrix.package }}
+      - name: Configure Garnix cache
         run: |
-          nix build .#${{ matrix.package }} --out-link result
+          # Add Garnix as a substituter to pull cached builds
+          echo "extra-substituters = https://cache.garnix.io" >> ~/.config/nix/nix.conf
+          echo "extra-trusted-public-keys = cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=" >> ~/.config/nix/nix.conf
 
-      - name: Get package info
-        id: pkg-info
+      - name: Fetch build-${{ matrix.version }} from cache
+        id: fetch
         run: |
-          VERSION=$(./result/bin/uv --version | awk '{print $2}')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          VERSION_ATTR=$(echo "${{ matrix.version }}" | tr '.' '-')
+          echo "Building/fetching packages.aarch64-darwin.build-${VERSION_ATTR}"
+          nix build .#build-${VERSION_ATTR} --out-link result
+          
+          # Extract version from binary
+          ACTUAL_VERSION=$(./result/bin/uv --version | awk '{print $2}')
+          echo "version=$ACTUAL_VERSION" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: uv-nix-${{ steps.pkg-info.outputs.version }}-darwin-arm64
+          name: uv-nix-${{ steps.fetch.outputs.version }}-darwin-arm64
           path: result/bin/uv
-          retention-days: 30
+          retention-days: 90
 
-  # Optional: Create a release when triggered by a tag
+  # Create a release when triggered by a tag
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build-linux, build-macos]
+    needs: [publish-linux, publish-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

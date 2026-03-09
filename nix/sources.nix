@@ -22,6 +22,14 @@ let
       version = "0.10.7";
       hash = "sha256:05ssx8vkhig2q3s7y36p7cdyc87q3jdh267rl3p0iyn6gn3lkm2v";
     }
+    {
+      version = "0.10.6";
+      hash = "sha256-KOoAj5v0k9SDsiFmjjaiLMRGn+VELulF//Rvv62U7CU=";
+    }
+    {
+      version = "0.10.5";
+      hash = "sha256-+EpRjeMXuzoFuMuvVEf0HqdhQqPpVhd+3paUhvbNafk=";
+    }
   ];
 
   # Fetch a single version
