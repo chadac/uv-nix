@@ -42,14 +42,72 @@ pub static SHARED_VENV: LazyLock<PathBuf> = LazyLock::new(|| {
 #[derive(Debug)]
 pub struct TestResult {
     pub success: bool,
+    pub skipped: bool,
+    pub skip_reason: Option<String>,
     pub stdout: String,
     pub stderr: String,
 }
 
-/// Install a package and run an import check
-pub fn test_package(package: &str, import_check: &str, no_binary: bool) -> TestResult {
+/// Check if a wheel is available for a package on the current platform.
+///
+/// Uses `uv pip install --dry-run --only-binary :all:` to check if uv would
+/// download a wheel. If it would fall back to source, this returns None.
+pub fn check_wheel_available(package: &str) -> Option<String> {
     let venv = SHARED_VENV.as_path();
     let python = venv.join("bin/python");
+
+    // Use --dry-run with --only-binary to check if a wheel exists
+    // If no wheel is available, this will fail with "no matching distribution"
+    let output = Command::new(UV_BIN.as_path())
+        .args([
+            "pip", "install",
+            "--dry-run",
+            "--only-binary", ":all:",
+            "--python", python.to_str().unwrap(),
+            package,
+        ])
+        .output()
+        .expect("wheel check command failed to execute");
+
+    if output.status.success() {
+        None // Wheel is available
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Some(format!("No wheel available for {}: {}", package, stderr.lines().next().unwrap_or("unknown error")))
+    }
+}
+
+/// Install a package and run an import check.
+///
+/// If `require_wheel` is true and no wheel is available, returns a skipped result.
+pub fn test_package(package: &str, import_check: &str, no_binary: bool) -> TestResult {
+    test_package_impl(package, import_check, no_binary, false)
+}
+
+/// Install a package and run an import check, requiring a wheel.
+///
+/// If no wheel is available for the current platform/Python version, the test
+/// is skipped rather than attempting a source build.
+pub fn test_package_wheel_only(package: &str, import_check: &str) -> TestResult {
+    test_package_impl(package, import_check, false, true)
+}
+
+fn test_package_impl(package: &str, import_check: &str, no_binary: bool, require_wheel: bool) -> TestResult {
+    let venv = SHARED_VENV.as_path();
+    let python = venv.join("bin/python");
+
+    // Check wheel availability if required
+    if require_wheel {
+        if let Some(reason) = check_wheel_available(package) {
+            return TestResult {
+                success: true, // Not a failure, just skipped
+                skipped: true,
+                skip_reason: Some(reason),
+                stdout: String::new(),
+                stderr: String::new(),
+            };
+        }
+    }
 
     // Build install command
     let mut install = Command::new(UV_BIN.as_path());
@@ -63,6 +121,8 @@ pub fn test_package(package: &str, import_check: &str, no_binary: bool) -> TestR
     if !install_out.status.success() {
         return TestResult {
             success: false,
+            skipped: false,
+            skip_reason: None,
             stdout: String::from_utf8_lossy(&install_out.stdout).to_string(),
             stderr: format!(
                 "Install failed:\n{}",
@@ -79,6 +139,8 @@ pub fn test_package(package: &str, import_check: &str, no_binary: bool) -> TestR
 
     TestResult {
         success: check.status.success(),
+        skipped: false,
+        skip_reason: None,
         stdout: String::from_utf8_lossy(&check.stdout).to_string(),
         stderr: String::from_utf8_lossy(&check.stderr).to_string(),
     }
@@ -114,11 +176,15 @@ pub fn test_package_in_container(
     match run_in_container(image, &script) {
         Ok(stdout) => TestResult {
             success: true,
+            skipped: false,
+            skip_reason: None,
             stdout,
             stderr: String::new(),
         },
         Err(stderr) => TestResult {
             success: false,
+            skipped: false,
+            skip_reason: None,
             stdout: String::new(),
             stderr,
         },
