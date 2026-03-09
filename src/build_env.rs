@@ -2,11 +2,28 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 
+use crate::config::PackageConfig;
 use crate::nix_config::{PackageBuildEntry, PACKAGE_BUILD_LIBS_JSON};
 use crate::nixpkgs;
+
+/// Effective build configuration for a package (merged from defaults + custom config).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffectivePackageConfig {
+    /// Package name.
+    pub name: String,
+    /// Libraries (runtime deps).
+    pub libraries: Vec<String>,
+    /// Build tools (e.g., cargo, cmake, pg_config).
+    pub build_tools: Vec<String>,
+    /// Nixpkgs source being used.
+    pub nixpkgs_source: String,
+    /// Whether this has custom config from pyproject.toml.
+    pub has_custom_config: bool,
+}
 
 /// Build a map of environment variables to inject into source distribution builds.
 ///
@@ -46,7 +63,7 @@ pub fn get_nix_build_env(package_name: Option<&str>) -> HashMap<OsString, OsStri
         );
     }
 
-    // Resolve per-package deps from package-build-libs.json
+    // Resolve per-package deps from package-build-libs.json + custom config
     if let Some(name) = package_name {
         if let Some(resolved) = resolve_package_build_env(name) {
             if !resolved.library_path.is_empty() {
@@ -77,6 +94,36 @@ pub fn get_nix_build_env(package_name: Option<&str>) -> HashMap<OsString, OsStri
     env_vars
 }
 
+/// Get the effective build configuration for a package.
+///
+/// This merges the defaults from `package-build-libs.json` with any custom
+/// configuration from `[[tool.uv-nix.package]]` in pyproject.toml.
+pub fn get_effective_package_config(package_name: &str) -> EffectivePackageConfig {
+    let cwd = env::current_dir().unwrap_or_default();
+    let project_dir = crate::nix_config::find_project_root(&cwd).unwrap_or(cwd);
+    let uv_nix_config = crate::config::find_config(&project_dir)
+        .map(|(c, _)| c)
+        .unwrap_or_default();
+
+    let custom_config = uv_nix_config.get_package_config(package_name);
+    let (libs, build_tools) = build_effective_entry(package_name, custom_config);
+
+    // Determine nixpkgs source
+    let source = if let Some(ref custom_nixpkgs) = custom_config.and_then(|c| c.nixpkgs.as_ref()) {
+        nixpkgs::NixpkgsSource::PyprojectToml { flake_ref: custom_nixpkgs.to_string() }
+    } else {
+        nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config)
+    };
+
+    EffectivePackageConfig {
+        name: package_name.to_string(),
+        libraries: libs,
+        build_tools,
+        nixpkgs_source: format!("{:?}", source),
+        has_custom_config: custom_config.map(|c| c.has_overrides()).unwrap_or(false),
+    }
+}
+
 /// Prepend `value` to the existing value of `key` (colon-separated).
 fn prepend_env(env_vars: &mut HashMap<OsString, OsString>, key: &str, value: &OsString) {
     let key = OsString::from(key);
@@ -105,19 +152,90 @@ struct PackageBuildPaths {
     bin_path: String,
 }
 
-/// Resolve build environment paths for a specific package from package-build-libs.json.
+/// Build the effective libs and build-tools for a package.
 ///
-/// Looks up the package in the embedded registry, resolves its `libs` and `build-tools`
-/// via nix-build (with caching in ~/.cache/uv-nix/), and returns the paths.
-fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
+/// Merges defaults from `package-build-libs.json` with custom config from pyproject.toml.
+fn build_effective_entry(
+    package_name: &str,
+    custom_config: Option<&PackageConfig>,
+) -> (Vec<String>, Vec<String>) {
+    let is_darwin = cfg!(target_os = "macos");
+
+    // Load defaults from package-build-libs.json
     let package_map: HashMap<String, PackageBuildEntry> =
-        serde_json::from_str(PACKAGE_BUILD_LIBS_JSON).ok()?;
+        serde_json::from_str(PACKAGE_BUILD_LIBS_JSON).unwrap_or_default();
+    let default_entry = package_map.get(package_name);
 
-    let entry = package_map.get(package_name)?;
+    // Start with default libs or custom override
+    let mut libs: Vec<String> = if let Some(custom) = custom_config {
+        if !custom.libraries.is_empty() {
+            // Custom `libraries` replaces defaults entirely
+            custom.libraries.clone()
+        } else if let Some(entry) = default_entry {
+            // Use defaults
+            entry.libs.clone()
+        } else {
+            Vec::new()
+        }
+    } else if let Some(entry) = default_entry {
+        entry.libs.clone()
+    } else {
+        Vec::new()
+    };
 
-    // Collect all attrs to resolve (libs + build-tools)
-    let all_attrs: Vec<String> = entry.libs.iter()
-        .chain(entry.build_tools.iter())
+    // Add platform-specific default libs
+    if let Some(entry) = default_entry {
+        if is_darwin {
+            libs.extend(entry.libs_darwin.clone());
+        } else {
+            libs.extend(entry.libs_linux.clone());
+        }
+    }
+
+    // Start with default build-tools
+    let mut build_tools: Vec<String> = default_entry
+        .map(|e| e.build_tools.clone())
+        .unwrap_or_default();
+
+    // Apply custom config additions
+    if let Some(custom) = custom_config {
+        // Add extra libraries
+        libs.extend(custom.extra_libraries.clone());
+
+        // Add platform-specific extra libraries
+        if is_darwin {
+            libs.extend(custom.extra_darwin_libraries.clone());
+        } else {
+            libs.extend(custom.extra_linux_libraries.clone());
+        }
+
+        // Add extra build tools
+        build_tools.extend(custom.extra_build_tools.clone());
+    }
+
+    (libs, build_tools)
+}
+
+/// Resolve build environment paths for a specific package.
+///
+/// Looks up the package in the embedded registry, merges with custom config,
+/// resolves via nix-build (with caching in ~/.cache/uv-nix/), and returns the paths.
+fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
+    let cwd = env::current_dir().ok()?;
+    let project_dir = crate::nix_config::find_project_root(&cwd).unwrap_or(cwd);
+    let uv_nix_config = crate::config::find_config(&project_dir)
+        .map(|(c, _)| c)
+        .unwrap_or_default();
+
+    // Get custom config if any
+    let custom_config = uv_nix_config.get_package_config(package_name);
+
+    // Build effective entry by merging defaults + custom config
+    let (libs, build_tools) = build_effective_entry(package_name, custom_config);
+
+    // Collect all attrs to resolve
+    let all_attrs: Vec<String> = libs.iter()
+        .chain(build_tools.iter())
         .cloned()
         .collect();
 
@@ -125,20 +243,19 @@ fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
         return None;
     }
 
-    // Resolve nixpkgs source for cache key + nix-build
-    let cwd = env::current_dir().ok()?;
-    let project_dir = crate::nix_config::find_project_root(&cwd).unwrap_or(cwd);
-    let uv_nix_config = crate::config::find_config(&project_dir)
-        .map(|(c, _)| c)
-        .unwrap_or_default();
-    let source = nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config);
+    // Determine nixpkgs source (per-package override or project default)
+    let source = if let Some(ref custom_nixpkgs) = custom_config.and_then(|c| c.nixpkgs.as_ref()) {
+        nixpkgs::NixpkgsSource::PyprojectToml { flake_ref: custom_nixpkgs.to_string() }
+    } else {
+        nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config)
+    };
     let nixpkgs_key = nixpkgs::nixpkgs_cache_key(&source);
 
-    // Cache key: hash of version + nixpkgs + package name + entry JSON
-    let entry_json = serde_json::to_string(&entry).unwrap_or_default();
+    // Cache key: hash of version + nixpkgs + package name + effective entry
+    let entry_json = serde_json::to_string(&(&libs, &build_tools)).unwrap_or_default();
     let cache_key = {
         let mut hasher = Sha256::new();
-        hasher.update(b"pkg-v1\0");
+        hasher.update(b"pkg-v2\0"); // Bump version for new format
         hasher.update(nixpkgs_key.as_bytes());
         hasher.update(b"\0");
         hasher.update(package_name.as_bytes());
@@ -156,7 +273,7 @@ fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
     // Cache miss — resolve via nix-build
     crate::status("Resolving", &format!("build deps for {package_name}"));
     debug!("Resolving package build env for {package_name}: libs={:?}, build-tools={:?}",
-           entry.libs, entry.build_tools);
+           libs, build_tools);
 
     match nixpkgs::resolve_build_paths(&all_attrs, &source) {
         Ok(resolved) => {
@@ -315,6 +432,58 @@ mod tests {
         let orjson = package_map.get("orjson").unwrap();
         assert!(orjson.libs.is_empty());
         assert!(orjson.build_tools.contains(&"cargo".to_string()));
+    }
+
+    #[test]
+    fn test_build_effective_entry_defaults() {
+        // Without custom config, should return defaults
+        let (libs, tools) = build_effective_entry("psycopg2", None);
+        assert!(libs.contains(&"libpq".to_string()));
+        assert!(tools.contains(&"libpq.pg_config".to_string()));
+    }
+
+    #[test]
+    fn test_build_effective_entry_override_libs() {
+        let custom = PackageConfig {
+            name: "psycopg2".to_string(),
+            libraries: vec!["postgresql_17".to_string()],
+            ..Default::default()
+        };
+        let (libs, tools) = build_effective_entry("psycopg2", Some(&custom));
+        // Custom libraries should replace defaults
+        assert_eq!(libs, vec!["postgresql_17"]);
+        // Build tools should still be from defaults
+        assert!(tools.contains(&"libpq.pg_config".to_string()));
+    }
+
+    #[test]
+    fn test_build_effective_entry_extra_libs() {
+        let custom = PackageConfig {
+            name: "psycopg2".to_string(),
+            extra_libraries: vec!["openssl".to_string()],
+            extra_build_tools: vec!["cmake".to_string()],
+            ..Default::default()
+        };
+        let (libs, tools) = build_effective_entry("psycopg2", Some(&custom));
+        // Should have defaults + extras
+        assert!(libs.contains(&"libpq".to_string()));
+        assert!(libs.contains(&"openssl".to_string()));
+        assert!(tools.contains(&"libpq.pg_config".to_string()));
+        assert!(tools.contains(&"cmake".to_string()));
+    }
+
+    #[test]
+    fn test_build_effective_entry_unknown_package() {
+        // For unknown packages with custom config
+        let custom = PackageConfig {
+            name: "my-custom-pkg".to_string(),
+            libraries: vec!["libfoo".to_string()],
+            extra_build_tools: vec!["cargo".to_string()],
+            ..Default::default()
+        };
+        let (libs, tools) = build_effective_entry("my-custom-pkg", Some(&custom));
+        assert_eq!(libs, vec!["libfoo"]);
+        assert_eq!(tools, vec!["cargo"]);
     }
 
     #[test]

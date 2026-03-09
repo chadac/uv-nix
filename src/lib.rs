@@ -9,12 +9,17 @@ use std::process::Command;
 
 pub mod build_env;
 pub mod cache;
+pub mod cli;
 pub mod config;
 pub mod ctypes_hook;
 pub mod nix_build;
 pub mod nix_config;
 pub mod nixpkgs;
 pub mod patchelf;
+
+// Re-export CLI types for ergonomic use from uv crate
+pub use cli::{CliOutput, InfoOptions, PatchOptions, RebuildOptions};
+pub use cli::{nix_info, nix_patch, nix_rebuild};
 
 /// Create a `nix` command with the required experimental features enabled.
 ///

@@ -43,52 +43,68 @@ diff --git a/crates/uv/src/lib.rs b/crates/uv/src/lib.rs
 index a60ee0d81..678d44377 100644
 --- a/crates/uv/src/lib.rs
 +++ b/crates/uv/src/lib.rs
-@@ -29,9 +29,10 @@ use uv_cache_info::Timestamp;
+@@ -29,9 +29,9 @@ use uv_cache_info::Timestamp;
  use uv_cli::SelfUpdateArgs;
  use uv_cli::{
      AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
 -    CacheNamespace, Cli, Commands, PipCommand, PipNamespace, ProjectCommand, PythonCommand,
 -    PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace, TopLevelArgs,
 -    WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
-+    CacheNamespace, Cli, Commands, NixCommand, NixNamespace, NixPatchEnvArgs, NixPatchPythonArgs,
-+    PipCommand, PipNamespace, ProjectCommand, PythonCommand, PythonNamespace, SelfCommand,
-+    SelfNamespace, ToolCommand, ToolNamespace, TopLevelArgs, WorkspaceCommand, WorkspaceNamespace,
-+    compat::CompatArgs,
++    CacheNamespace, Cli, Commands, NixCommand, NixNamespace, PipCommand, PipNamespace,
++    ProjectCommand, PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand,
++    ToolNamespace, TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
  };
  use uv_client::BaseClientBuilder;
  use uv_configuration::min_stack_size;
-@@ -1282,6 +1283,36 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
+@@ -1281,6 +1281,53 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
              ))
              .await
          }
 +        Commands::Nix(NixNamespace {
-+            command: NixCommand::Hello(args),
++            command: NixCommand::Patch(args),
 +        }) => {
-+            uv_nix::nix_hello(args.name)?;
++            let mut out = uv_nix::CliOutput {
++                stdout: &mut printer.stdout(),
++                stderr: &mut printer.stderr(),
++            };
++            uv_nix::nix_patch(&mut out, uv_nix::PatchOptions {
++                path: args.path,
++                only_python: args.only_python,
++                only_packages: args.only_packages,
++                packages: args.packages,
++                patchelf: args.patchelf,
++                interpreter: args.interpreter,
++                rpath: args.rpath,
++            })?;
 +            Ok(ExitStatus::Success)
 +        }
 +        Commands::Nix(NixNamespace {
-+            command:
-+                NixCommand::PatchEnv(NixPatchEnvArgs {
-+                    path,
-+                    patchelf,
-+                    interpreter,
-+                    rpath,
-+                }),
++            command: NixCommand::Info(args),
 +        }) => {
-+            uv_nix::patch_env(&path, patchelf, interpreter, rpath)?;
++            let mut out = uv_nix::CliOutput {
++                stdout: &mut printer.stdout(),
++                stderr: &mut printer.stderr(),
++            };
++            uv_nix::nix_info(&mut out, uv_nix::InfoOptions {
++                path: args.path,
++                verbose: args.show_details,
++                json: args.json,
++                package: args.package,
++            })?;
 +            Ok(ExitStatus::Success)
 +        }
 +        Commands::Nix(NixNamespace {
-+            command:
-+                NixCommand::PatchPython(NixPatchPythonArgs {
-+                    path,
-+                    patchelf,
-+                    interpreter,
-+                    rpath,
-+                }),
++            command: NixCommand::Rebuild(args),
 +        }) => {
-+            uv_nix::patch_python(&path, patchelf, interpreter, rpath)?;
++            let mut out = uv_nix::CliOutput {
++                stdout: &mut printer.stdout(),
++                stderr: &mut printer.stderr(),
++            };
++            uv_nix::nix_rebuild(&mut out, uv_nix::RebuildOptions {
++                path: args.path,
++                packages: args.packages,
++                force: args.force,
++            })?;
 +            Ok(ExitStatus::Success)
 +        }
          #[cfg(feature = "self-update")]

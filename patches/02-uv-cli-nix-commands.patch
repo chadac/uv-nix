@@ -15,10 +15,10 @@ index e2a7281d6..8e3b0f4f9 100644
      /// Manage uv's cache.
      #[command(
          after_help = "Use `uv help cache` for more details.",
-@@ -856,6 +862,59 @@ pub struct SelfUpdateArgs {
+@@ -856,6 +862,76 @@ pub struct SelfUpdateArgs {
      pub dry_run: bool,
  }
- 
+
 +#[derive(Args)]
 +pub struct NixNamespace {
 +    #[command(subcommand)]
@@ -27,49 +27,66 @@ index e2a7281d6..8e3b0f4f9 100644
 +
 +#[derive(Subcommand)]
 +pub enum NixCommand {
-+    /// Print a hello message (proof of concept).
-+    Hello(NixHelloArgs),
 +    /// Patch ELF binaries in a virtual environment for NixOS compatibility.
-+    PatchEnv(NixPatchEnvArgs),
-+    /// Patch a managed Python installation for NixOS compatibility.
-+    PatchPython(NixPatchPythonArgs),
++    Patch(NixPatchArgs),
++    /// Show information about patched packages in a virtual environment.
++    Info(NixInfoArgs),
++    /// Rebuild/re-patch all native binaries in a virtual environment.
++    Rebuild(NixRebuildArgs),
 +}
 +
 +#[derive(Args)]
-+pub struct NixHelloArgs {
-+    /// An optional name to greet.
-+    #[arg(long)]
-+    pub name: Option<String>,
-+}
-+
-+#[derive(Args)]
-+pub struct NixPatchEnvArgs {
++pub struct NixPatchArgs {
 +    /// Path to the virtual environment to patch.
++    #[arg(default_value = ".venv")]
 +    pub path: PathBuf,
-+    /// Path to the patchelf binary.
++    /// Only patch the Python interpreter, not packages.
++    #[arg(long, conflicts_with = "only_packages")]
++    pub only_python: bool,
++    /// Only patch packages, not the Python interpreter.
++    #[arg(long, conflicts_with = "only_python")]
++    pub only_packages: bool,
++    /// Specific packages to patch (comma-separated). If not specified, patches all.
++    #[arg(long, value_delimiter = ',')]
++    pub packages: Option<Vec<String>>,
++    /// Path to the patchelf binary (Linux) or install_name_tool (macOS).
 +    #[arg(long)]
 +    pub patchelf: Option<PathBuf>,
-+    /// Dynamic linker interpreter path.
++    /// Dynamic linker interpreter path (Linux only).
 +    #[arg(long)]
 +    pub interpreter: Option<PathBuf>,
-+    /// RPATH entries (colon-separated).
++    /// Additional RPATH entries (colon-separated).
 +    #[arg(long)]
 +    pub rpath: Option<String>,
 +}
 +
 +#[derive(Args)]
-+pub struct NixPatchPythonArgs {
-+    /// Path to the Python installation directory.
++pub struct NixInfoArgs {
++    /// Path to the virtual environment.
++    #[arg(default_value = ".venv")]
 +    pub path: PathBuf,
-+    /// Path to the patchelf binary.
++    /// Show verbose output including individual binaries and RPATH entries.
 +    #[arg(long)]
-+    pub patchelf: Option<PathBuf>,
-+    /// Dynamic linker interpreter path.
++    pub show_details: bool,
++    /// Output as JSON.
 +    #[arg(long)]
-+    pub interpreter: Option<PathBuf>,
-+    /// RPATH entries (colon-separated).
++    pub json: bool,
++    /// Show build configuration for a specific package instead of venv info.
++    #[arg(short, long)]
++    pub package: Option<String>,
++}
++
++#[derive(Args)]
++pub struct NixRebuildArgs {
++    /// Path to the virtual environment.
++    #[arg(default_value = ".venv")]
++    pub path: PathBuf,
++    /// Specific packages to rebuild (comma-separated). If not specified, rebuilds all.
++    #[arg(long, value_delimiter = ',')]
++    pub packages: Option<Vec<String>>,
++    /// Force rebuild even if packages appear up-to-date.
 +    #[arg(long)]
-+    pub rpath: Option<String>,
++    pub force: bool,
 +}
 +
  #[derive(Args)]
