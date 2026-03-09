@@ -1,0 +1,112 @@
+name: Build Artifacts
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'UV version to build (e.g., 0.10.9)'
+        required: false
+        type: string
+
+# Explicitly exclude PRs - only run on push to main/tags
+# PRs will not trigger this workflow
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - build-0-10-9
+          - build-0-10-8
+          - build-0-10-7
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Build ${{ matrix.package }}
+        run: |
+          nix build .#${{ matrix.package }} --out-link result
+
+      - name: Get package info
+        id: pkg-info
+        run: |
+          VERSION=$(./result/bin/uv --version | awk '{print $2}')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-nix-${{ steps.pkg-info.outputs.version }}-linux-x86_64
+          path: result/bin/uv
+          retention-days: 30
+
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        package:
+          - build-0-10-9
+          - build-0-10-8
+          - build-0-10-7
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Build ${{ matrix.package }}
+        run: |
+          nix build .#${{ matrix.package }} --out-link result
+
+      - name: Get package info
+        id: pkg-info
+        run: |
+          VERSION=$(./result/bin/uv --version | awk '{print $2}')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-nix-${{ steps.pkg-info.outputs.version }}-darwin-arm64
+          path: result/bin/uv
+          retention-days: 30
+
+  # Optional: Create a release when triggered by a tag
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            cp "$dir/uv" "release/$name"
+          done
+          ls -la release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          generate_release_notes: true
