@@ -3,107 +3,102 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    uv-src = {
-      url = "github:astral-sh/uv/0.10.8";
-      flake = false;
-    };
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    systems.url = "github:nix-systems/default";
     cached-exec = {
       url = "github:chadac/cached-exec";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, uv-src, cached-exec }:
-    let
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
-    in {
-      lib = forAllSystems (system:
+  outputs = { self, flake-parts, nixpkgs, systems, cached-exec, ... }@inputs:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = import systems;
+
+      perSystem = { pkgs, system, lib, ... }:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in {
-          # Callable function: takes { pythonSrc } and returns a patched derivation
-          patchPython = pkgs.callPackage ./nix/patch-python.nix { inherit pkgs; };
-        }
-      );
+          # Import source definitions
+          sources = import ./nix/sources.nix { inherit (pkgs) fetchFromGitHub; };
+          binSources = import ./nix/uv-nix-sources.nix { inherit (pkgs) fetchurl; };
 
-      packages = forAllSystems (system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
+          # Import library helpers
+          uvNixLib = import ./nix/lib.nix { inherit lib pkgs; };
 
-          patchedSrc = pkgs.stdenv.mkDerivation {
-            name = "uv-nix-src";
-            src = uv-src;
-            phases = [ "unpackPhase" "patchPhase" "installPhase" ];
+          # Import build function
+          buildUv = pkgs.callPackage ./. {};
 
-            postUnpack = ''
-              mkdir -p $sourceRoot/crates/uv-nix/src
-              mkdir -p $sourceRoot/crates/uv-nix/data
-              cp ${./Cargo.toml} $sourceRoot/crates/uv-nix/Cargo.toml
-              cp -r ${./src}/* $sourceRoot/crates/uv-nix/src/
-              cp -r ${./data}/* $sourceRoot/crates/uv-nix/data/
-            '';
-
-            patches = [
-              ./patches/01-workspace-add-uv-nix.patch
-              ./patches/02-uv-cli-nix-commands.patch
-              ./patches/03-uv-crate-nix-dispatch.patch
-              ./patches/04-uv-python-nix-hook.patch
-              ./patches/05-uv-dispatch-nix-build-env.patch
-            ];
-
-            postPatch = ''
-              cp ${./Cargo.lock} Cargo.lock
-            '';
-
-            installPhase = ''
-              cp -r . $out
-            '';
+          # Build a source version
+          mkSourceBuild = { version, src }: buildUv {
+            uvSrc = src;
+            inherit version;
+            uvNixSrc = self;
           };
 
-          uvUnwrapped = pkgs.rustPlatform.buildRustPackage {
-            pname = "uv";
-            version = "0.10.8-nix";
+          # Build a pre-built binary package with autoPatchelfHook
+          mkBinaryPackage = version:
+            let
+              binInfo = binSources.get version system;
+            in if binInfo == null then null
+               else pkgs.stdenv.mkDerivation {
+                 pname = "uv-nix-bin";
+                 inherit version;
 
-            src = patchedSrc;
+                 src = pkgs.fetchurl {
+                   inherit (binInfo) url hash;
+                 };
 
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-            };
+                 nativeBuildInputs = [ pkgs.autoPatchelfHook ];
 
-            buildInputs = [
-              pkgs.rust-jemalloc-sys
-            ];
+                 buildInputs = uvNixLib.defaultLibs ++ [
+                   pkgs.stdenv.cc.cc.lib  # libstdc++
+                 ];
 
-            nativeBuildInputs = [
-              pkgs.installShellFiles
-            ];
+                 sourceRoot = ".";
 
-            cargoBuildFlags = [
-              "--package"
-              "uv"
-            ];
+                 installPhase = ''
+                   runHook preInstall
+                   install -Dm755 uv $out/bin/uv
+                   runHook postInstall
+                 '';
 
-            # Tests require Python 3
-            doCheck = false;
+                 meta = {
+                   description = "uv Python package manager with Nix integration (pre-built)";
+                   mainProgram = "uv";
+                 };
+               };
 
-            meta = with pkgs.lib; {
-              description = "uv Python package manager with Nix integration";
-              license = with licenses; [ asl20 mit ];
-              mainProgram = "uv";
-            };
+          # Generate packages for all source versions
+          sourcePackages = builtins.listToAttrs (map (v: {
+            name = "build-${v.version}";
+            value = mkSourceBuild v;
+          }) sources.all);
+
+          # Generate packages for all binary versions (filter out nulls)
+          binaryPackages = builtins.listToAttrs (
+            builtins.filter (x: x.value != null) (
+              map (version: {
+                name = "bin-${version}";
+                value = mkBinaryPackage version;
+              }) binSources.allVersions
+            )
+          );
+
+          # Latest versions
+          latestSource = mkSourceBuild sources.latest;
+          latestBinary = if binSources.latestVersion != null
+                         then mkBinaryPackage binSources.latestVersion
+                         else null;
+
+        in {
+          packages = sourcePackages // binaryPackages // {
+            # Aliases for latest
+            default = if latestBinary != null then latestBinary else latestSource;
+            build = latestSource;
+          } // lib.optionalAttrs (latestBinary != null) {
+            bin = latestBinary;
           };
 
-        in {
-          default = uvUnwrapped;
-        }
-      );
-
-      devShells = forAllSystems (system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in {
-          default = pkgs.mkShell {
+          devShells.default = pkgs.mkShell {
             buildInputs = [
               pkgs.rustc
               pkgs.cargo
@@ -117,7 +112,7 @@
               pkgs.pkg-config
               # Dev tools
               cached-exec.packages.${system}.default
-            ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+            ] ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.apple-sdk
               pkgs.libiconv
             ];
@@ -127,7 +122,19 @@
               export PATH="$PWD/uv/target/debug:$PATH"
             '';
           };
-        }
-      );
+        };
+
+      # Flake-level outputs (not per-system)
+      flake = {
+        # Expose lib per-system (for patchPython)
+        lib = builtins.listToAttrs (map (system: {
+          name = system;
+          value = let
+            pkgs = nixpkgs.legacyPackages.${system};
+          in {
+            patchPython = pkgs.callPackage ./nix/patch-python.nix { inherit pkgs; };
+          };
+        }) (import systems));
+      };
     };
 }

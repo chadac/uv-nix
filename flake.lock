@@ -40,6 +40,24 @@
         "type": "github"
       }
     },
+    "flake-parts_2": {
+      "inputs": {
+        "nixpkgs-lib": "nixpkgs-lib_2"
+      },
+      "locked": {
+        "lastModified": 1772408722,
+        "narHash": "sha256-rHuJtdcOjK7rAHpHphUb1iCvgkU3GpfvicLMwwnfMT0=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f20dc5d9b8027381c474144ecabc9034d6a839a3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1772773019,
@@ -71,11 +89,27 @@
         "type": "github"
       }
     },
+    "nixpkgs-lib_2": {
+      "locked": {
+        "lastModified": 1772328832,
+        "narHash": "sha256-e+/T/pmEkLP6BHhYjx6GmwP5ivonQQn0bJdH9YrRB+Q=",
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "rev": "c185c7a5e5dd8f9add5b2f8ebeff00888b070742",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "cached-exec": "cached-exec",
+        "flake-parts": "flake-parts_2",
         "nixpkgs": "nixpkgs",
-        "uv-src": "uv-src"
+        "systems": "systems_2"
       }
     },
     "systems": {
@@ -93,20 +127,18 @@
         "type": "github"
       }
     },
-    "uv-src": {
-      "flake": false,
+    "systems_2": {
       "locked": {
-        "lastModified": 1772572083,
-        "narHash": "sha256-kdIzLKdpqEnIo4ca7fAaerF8IRw1UTpn3deMZ/HCbAk=",
-        "owner": "astral-sh",
-        "repo": "uv",
-        "rev": "c021be36ab26353cf8732aa77f4e34d6e1752393",
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
         "type": "github"
       },
       "original": {
-        "owner": "astral-sh",
-        "ref": "0.10.8",
-        "repo": "uv",
+        "owner": "nix-systems",
+        "repo": "default",
         "type": "github"
       }
     }
