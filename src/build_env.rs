@@ -200,8 +200,7 @@ fn build_effective_entry(
     // Apply custom config additions
     if let Some(custom) = custom_config {
         // Add extra libraries (filtered by platform)
-        let system = if is_darwin { "aarch64-darwin" } else { "x86_64-linux" };
-        libs.extend(custom.extra_libraries_for_system(system));
+        libs.extend(custom.extra_libraries_for_system(crate::current_system()));
 
         // Add extra build tools
         build_tools.extend(custom.extra_build_tools.clone());
@@ -333,12 +332,7 @@ fn resolve_extra_build_paths() -> Option<nixpkgs::ResolvedBuildPaths> {
     let (uv_nix_config, project_dir) = crate::config::find_config(&cwd)?;
 
     // Get libraries filtered for current system
-    let system = if cfg!(target_os = "macos") {
-        "aarch64-darwin"
-    } else {
-        "x86_64-linux"
-    };
-    let libs = uv_nix_config.extra_libraries_for_system(system);
+    let libs = uv_nix_config.extra_libraries_for_system(crate::current_system());
 
     if libs.is_empty() {
         return None;

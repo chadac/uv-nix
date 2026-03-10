@@ -17,6 +17,25 @@ pub mod nix_config;
 pub mod nixpkgs;
 pub mod patchelf;
 
+/// Returns the Nix system string for the current platform (e.g., "x86_64-linux", "aarch64-darwin").
+pub fn current_system() -> &'static str {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    { "x86_64-linux" }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    { "aarch64-linux" }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    { "x86_64-darwin" }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    { "aarch64-darwin" }
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+    )))]
+    { "unknown" }
+}
+
 // Re-export CLI types for ergonomic use from uv crate
 pub use cli::{CliOutput, InfoOptions, PatchOptions, RebuildOptions};
 pub use cli::{nix_info, nix_patch, nix_rebuild};
@@ -95,12 +114,7 @@ fn resolve_extra_libraries(start: &Path) -> Option<String> {
     let nix_key = nixpkgs::nixpkgs_cache_key(&source);
 
     // Get library names for the current system
-    let system = if cfg!(target_os = "macos") {
-        "aarch64-darwin"
-    } else {
-        "x86_64-linux"
-    };
-    let libs = uv_nix_config.extra_libraries_for_system(system);
+    let libs = uv_nix_config.extra_libraries_for_system(current_system());
 
     if libs.is_empty() {
         return None;
