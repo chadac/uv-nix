@@ -3,54 +3,54 @@
 #
 # Usage:
 #   binSources = import ./uv-nix-sources.nix { inherit (pkgs) fetchurl; };
-#   latestBin = binSources.latest "x86_64-linux";  # { version, url, hash, nixpkgsRev }
-#   specificBin = binSources.get "0.10.8" "x86_64-linux";
+#   latestBin = binSources.latest "x86_64-linux";  # { version, url, hash, releaseTag }
+#   specificBin = binSources.get "0.10.9" "x86_64-linux";
 { fetchurl }:
 
 let
   # GitHub release URL base
   releaseBase = "https://github.com/chadac/uv-nix/releases/download";
 
-  # Map Nix system to release asset suffix
-  # Note: Only x86_64-linux and aarch64-darwin are currently built by CI
-  # aarch64-linux would require ARM Linux runners or QEMU emulation
-  # x86_64-darwin would require Intel Mac runners (not available on GHA free tier)
-  systemToAsset = {
-    "x86_64-linux" = "linux-x86_64";
-    "aarch64-linux" = "linux-aarch64";  # Not currently built
-    "x86_64-darwin" = "darwin-x86_64";  # Not currently built
-    "aarch64-darwin" = "darwin-arm64";
-  };
-
   # Map of version -> binary info
   # Each version tracks:
-  #   - nixpkgsRev: the nixpkgs commit used for building (important for ABI compat)
-  #   - hashes: map of system -> hash (SRI format)
+  #   - releaseTag: the GitHub release tag (e.g., "v0.10.9-nix.1")
+  #   - assets: map of system -> { name, hash } for each binary
   #
   # Binaries are published via CI to GitHub Releases as raw executables.
   # Hashes are populated after each release build.
   #
   # To add a new version:
-  # 1. Push a tag (e.g., git tag v0.10.9 && git push origin v0.10.9)
+  # 1. Push a tag (e.g., git tag v0.10.9-nix.1 && git push origin v0.10.9-nix.1)
   # 2. Wait for CI to create the release
-  # 3. Get hashes: nix hash to-sri sha256:$(curl -sL <url> | sha256sum | cut -d' ' -f1)
+  # 3. Get hashes: nix-prefetch-url <url>
   # 4. Add entry below
   binaries = {
-    # "0.10.9" = {
-    #   nixpkgsRev = "aca4d95fce4914b3892661bcb80b8087293536c6";
-    #   hashes = {
-    #     "x86_64-linux" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    #     "aarch64-linux" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    #     "aarch64-darwin" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    #   };
-    # };
+    "0.10.9-nix" = {
+      releaseTag = "v0.10.9-nix.1";
+      assets = {
+        "x86_64-linux" = {
+          name = "uv-nix-0.10.9-linux-x86_64";
+          hash = "sha256-N4cdXeLnBjSrFuwenzZVudHTcn5QNT/TYGsLZiYWZEM=";
+        };
+        "aarch64-linux" = {
+          name = "uv-nix-0.10.9-nix-linux-aarch64";
+          hash = "sha256-BB67XHdSqO+uFk9HCHEp9V9WA+qe3zqMX2cciFPxCK4=";
+        };
+        "aarch64-darwin" = {
+          name = "uv-nix-0.10.9-darwin-arm64";
+          hash = "sha256-zS9PkBFSLQLF5ihE+PU/OFFYFieTHitt2ghdhwUrqe4=";
+        };
+      };
+    };
   };
 
   # Build URL for a version and system
   mkUrl = version: system:
-    let asset = systemToAsset.${system} or null;
-    in if asset == null then null
-       else "${releaseBase}/v${version}/uv-nix-${version}-${asset}";
+    let
+      versionData = binaries.${version} or null;
+      assetData = if versionData == null then null else versionData.assets.${system} or null;
+    in if assetData == null then null
+       else "${releaseBase}/${versionData.releaseTag}/${assetData.name}";
 
   # Get all available versions (sorted newest first)
   allVersions = builtins.sort (a: b: builtins.compareVersions a b > 0) (builtins.attrNames binaries);
@@ -68,32 +68,35 @@ in {
   get = version: system:
     let
       versionData = binaries.${version} or null;
-      hash = if versionData == null then null else versionData.hashes.${system} or null;
+      assetData = if versionData == null then null else versionData.assets.${system} or null;
       url = mkUrl version system;
-    in if hash == null || url == null then null
+    in if assetData == null || url == null then null
        else {
-         inherit version system url hash;
-         inherit (versionData) nixpkgsRev;
+         inherit version system url;
+         inherit (assetData) hash;
+         inherit (versionData) releaseTag;
        };
 
   # Check if binary exists for version/system
   exists = version: system:
-    (binaries.${version}.hashes.${system} or null) != null;
+    (binaries.${version}.assets.${system} or null) != null;
 
   # Get latest binary info for a system (returns null if none available)
   latest = system:
     if latestVersion == null then null
     else let
-      hash = binaries.${latestVersion}.hashes.${system} or null;
+      versionData = binaries.${latestVersion};
+      assetData = versionData.assets.${system} or null;
       url = mkUrl latestVersion system;
-    in if hash == null || url == null then null
+    in if assetData == null || url == null then null
        else {
          version = latestVersion;
-         inherit url hash;
-         nixpkgsRev = binaries.${latestVersion}.nixpkgsRev;
+         inherit url;
+         inherit (assetData) hash;
+         inherit (versionData) releaseTag;
        };
 
   # List versions available for a specific system
   versionsForSystem = system:
-    builtins.filter (v: (binaries.${v}.hashes.${system} or null) != null) allVersions;
+    builtins.filter (v: (binaries.${v}.assets.${system} or null) != null) allVersions;
 }

@@ -55,11 +55,12 @@
                  pname = "uv-nix-bin";
                  inherit version;
 
-                 # Fetch raw binary from GitHub release
-                 src = pkgs.fetchurl {
-                   inherit (binInfo) url hash;
-                   executable = true;
-                 };
+                # Fetch raw binary from GitHub release using builtins.fetchurl
+                # This avoids the reference checking that pkgs.fetchurl does
+                src = builtins.fetchurl {
+                  url = binInfo.url;
+                  sha256 = binInfo.hash;
+                };
 
                  dontUnpack = true;
 
@@ -69,7 +70,8 @@
 
                  buildInputs = lib.optionals pkgs.stdenv.isLinux (
                    uvNixLib.defaultLibs ++ [
-                     pkgs.stdenv.cc.cc.lib  # libstdc++
+                     pkgs.stdenv.cc.cc.lib   # libstdc++
+                     pkgs.rust-jemalloc-sys  # libjemalloc.so.2 with Rust prefix
                    ]
                  );
 
