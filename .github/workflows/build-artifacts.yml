@@ -53,18 +53,14 @@ jobs:
 
       - uses: DeterminateSystems/determinate-nix-action@v3
 
-      - name: Configure Garnix cache
-        run: |
-          # Add Garnix as a substituter to pull cached builds
-          echo "extra-substituters = https://cache.garnix.io" | sudo tee -a /etc/nix/nix.conf
-          echo "extra-trusted-public-keys = cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=" | sudo tee -a /etc/nix/nix.conf
-
       - name: Fetch build-${{ matrix.version }} from cache
         id: fetch
         run: |
           VERSION_ATTR=$(echo "${{ matrix.version }}" | tr '.' '-')
           echo "Building/fetching packages.x86_64-linux.build-${VERSION_ATTR}"
-          nix build .#build-${VERSION_ATTR} --out-link result
+          nix build .#build-${VERSION_ATTR} --out-link result -L \
+            --extra-substituters "https://cache.garnix.io" \
+            --extra-trusted-public-keys "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
           
           # Extract version from binary
           ACTUAL_VERSION=$(./result/bin/uv --version | awk '{print $2}')
