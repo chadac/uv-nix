@@ -8,37 +8,49 @@
 { fetchurl }:
 
 let
+  # GitHub release URL base
+  releaseBase = "https://github.com/chadac/uv-nix/releases/download";
+
+  # Map Nix system to release asset suffix
+  # Note: Only x86_64-linux and aarch64-darwin are currently built by CI
+  # aarch64-linux would require ARM Linux runners or QEMU emulation
+  # x86_64-darwin would require Intel Mac runners (not available on GHA free tier)
+  systemToAsset = {
+    "x86_64-linux" = "linux-x86_64";
+    "aarch64-linux" = "linux-aarch64";  # Not currently built
+    "x86_64-darwin" = "darwin-x86_64";  # Not currently built
+    "aarch64-darwin" = "darwin-arm64";
+  };
+
   # Map of version -> binary info
   # Each version tracks:
   #   - nixpkgsRev: the nixpkgs commit used for building (important for ABI compat)
-  #   - systems: map of system -> { url, hash }
+  #   - hashes: map of system -> hash (SRI format)
   #
-  # Binaries are published via CI to GitHub Releases.
+  # Binaries are published via CI to GitHub Releases as raw executables.
   # Hashes are populated after each release build.
+  #
+  # To add a new version:
+  # 1. Push a tag (e.g., git tag v0.10.9 && git push origin v0.10.9)
+  # 2. Wait for CI to create the release
+  # 3. Get hashes: nix hash to-sri sha256:$(curl -sL <url> | sha256sum | cut -d' ' -f1)
+  # 4. Add entry below
   binaries = {
-    # Example structure (uncomment and fill when binaries are published):
-    # "0.10.8" = {
+    # "0.10.9" = {
     #   nixpkgsRev = "aca4d95fce4914b3892661bcb80b8087293536c6";
-    #   systems = {
-    #     "x86_64-linux" = {
-    #       url = "https://github.com/chadac/uv-nix/releases/download/v0.10.8/uv-nix-0.10.8-x86_64-linux.tar.gz";
-    #       hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    #     };
-    #     "aarch64-linux" = {
-    #       url = "https://github.com/chadac/uv-nix/releases/download/v0.10.8/uv-nix-0.10.8-aarch64-linux.tar.gz";
-    #       hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    #     };
-    #     "x86_64-darwin" = {
-    #       url = "https://github.com/chadac/uv-nix/releases/download/v0.10.8/uv-nix-0.10.8-x86_64-darwin.tar.gz";
-    #       hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    #     };
-    #     "aarch64-darwin" = {
-    #       url = "https://github.com/chadac/uv-nix/releases/download/v0.10.8/uv-nix-0.10.8-aarch64-darwin.tar.gz";
-    #       hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    #     };
+    #   hashes = {
+    #     "x86_64-linux" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    #     "aarch64-linux" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    #     "aarch64-darwin" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     #   };
     # };
   };
+
+  # Build URL for a version and system
+  mkUrl = version: system:
+    let asset = systemToAsset.${system} or null;
+    in if asset == null then null
+       else "${releaseBase}/v${version}/uv-nix-${version}-${asset}";
 
   # Get all available versions (sorted newest first)
   allVersions = builtins.sort (a: b: builtins.compareVersions a b > 0) (builtins.attrNames binaries);
@@ -56,29 +68,32 @@ in {
   get = version: system:
     let
       versionData = binaries.${version} or null;
-      systemData = if versionData == null then null else versionData.systems.${system} or null;
-    in if systemData == null then null
-       else systemData // {
-         inherit version system;
+      hash = if versionData == null then null else versionData.hashes.${system} or null;
+      url = mkUrl version system;
+    in if hash == null || url == null then null
+       else {
+         inherit version system url hash;
          inherit (versionData) nixpkgsRev;
        };
 
   # Check if binary exists for version/system
   exists = version: system:
-    (binaries.${version}.systems.${system} or null) != null;
+    (binaries.${version}.hashes.${system} or null) != null;
 
   # Get latest binary info for a system (returns null if none available)
   latest = system:
     if latestVersion == null then null
     else let
-      info = binaries.${latestVersion}.systems.${system} or null;
-    in if info == null then null
-       else info // {
+      hash = binaries.${latestVersion}.hashes.${system} or null;
+      url = mkUrl latestVersion system;
+    in if hash == null || url == null then null
+       else {
          version = latestVersion;
+         inherit url hash;
          nixpkgsRev = binaries.${latestVersion}.nixpkgsRev;
        };
 
   # List versions available for a specific system
   versionsForSystem = system:
-    builtins.filter (v: (binaries.${v}.systems.${system} or null) != null) allVersions;
+    builtins.filter (v: (binaries.${v}.hashes.${system} or null) != null) allVersions;
 }

@@ -27,11 +27,23 @@
           # Import build function
           buildUv = pkgs.callPackage ./. {};
 
+          # Filter self to only include files needed for uv-nix build
+          # This prevents cache invalidation when unrelated files change (e.g., CI configs)
+          uvNixSrc = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./src
+              ./data
+              ./patches
+            ];
+          };
+
           # Build a source version
           mkSourceBuild = { version, src }: buildUv {
             uvSrc = src;
             inherit version;
-            uvNixSrc = self;
+            inherit uvNixSrc;
           };
 
           # Build a pre-built binary package with autoPatchelfHook
@@ -43,21 +55,27 @@
                  pname = "uv-nix-bin";
                  inherit version;
 
+                 # Fetch raw binary from GitHub release
                  src = pkgs.fetchurl {
                    inherit (binInfo) url hash;
+                   executable = true;
                  };
 
-                 nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+                 dontUnpack = true;
 
-                 buildInputs = uvNixLib.defaultLibs ++ [
-                   pkgs.stdenv.cc.cc.lib  # libstdc++
+                 nativeBuildInputs = lib.optionals pkgs.stdenv.isLinux [
+                   pkgs.autoPatchelfHook
                  ];
 
-                 sourceRoot = ".";
+                 buildInputs = lib.optionals pkgs.stdenv.isLinux (
+                   uvNixLib.defaultLibs ++ [
+                     pkgs.stdenv.cc.cc.lib  # libstdc++
+                   ]
+                 );
 
                  installPhase = ''
                    runHook preInstall
-                   install -Dm755 uv $out/bin/uv
+                   install -Dm755 $src $out/bin/uv
                    runHook postInstall
                  '';
 
