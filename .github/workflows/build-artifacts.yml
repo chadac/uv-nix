@@ -73,6 +73,43 @@ jobs:
           path: result/bin/uv
           retention-days: 90
 
+  # Fetch aarch64-linux artifacts from Garnix cache
+  publish-linux-arm:
+    needs: wait-for-garnix
+    if: needs.wait-for-garnix.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version:
+          - "0.10.9"
+          - "0.10.8"
+          - "0.10.7"
+          - "0.10.6"
+          - "0.10.5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - name: Fetch build-${{ matrix.version }} from cache
+        id: fetch
+        run: |
+          VERSION_ATTR=$(echo "${{ matrix.version }}" | tr '.' '-')
+          echo "Building/fetching packages.aarch64-linux.build-${VERSION_ATTR}"
+          nix build .#packages.aarch64-linux.build-${VERSION_ATTR} --out-link result -L \
+            --extra-substituters "https://cache.garnix.io" \
+            --extra-trusted-public-keys "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
+          
+          # Extract version from binary (can't run ARM binary on x86, so use the version matrix)
+          echo "version=${{ matrix.version }}-nix" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-nix-${{ steps.fetch.outputs.version }}-linux-aarch64
+          path: result/bin/uv
+          retention-days: 90
+
   publish-macos:
     needs: wait-for-garnix
     if: needs.wait-for-garnix.outputs.should_publish == 'true'
@@ -113,7 +150,7 @@ jobs:
   # Create a release when triggered by a tag
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [publish-linux, publish-macos]
+    needs: [publish-linux, publish-linux-arm, publish-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
