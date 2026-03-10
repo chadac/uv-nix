@@ -44,10 +44,6 @@ jobs:
       matrix:
         version:
           - "0.10.9"
-          - "0.10.8"
-          - "0.10.7"
-          - "0.10.6"
-          - "0.10.5"
     steps:
       - uses: actions/checkout@v4
 
@@ -82,10 +78,6 @@ jobs:
       matrix:
         version:
           - "0.10.9"
-          - "0.10.8"
-          - "0.10.7"
-          - "0.10.6"
-          - "0.10.5"
     steps:
       - uses: actions/checkout@v4
 
@@ -118,10 +110,6 @@ jobs:
       matrix:
         version:
           - "0.10.9"
-          - "0.10.8"
-          - "0.10.7"
-          - "0.10.6"
-          - "0.10.5"
     steps:
       - uses: actions/checkout@v4
 

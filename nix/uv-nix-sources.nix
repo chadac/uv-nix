@@ -22,7 +22,9 @@ let
   # To add a new version:
   # 1. Push a tag (e.g., git tag v0.10.9-nix.1 && git push origin v0.10.9-nix.1)
   # 2. Wait for CI to create the release
-  # 3. Get hashes: nix-prefetch-url <url>
+  # 3. Get hashes using nix-prefetch-url and convert to SRI format:
+  #      hash=$(nix-prefetch-url <url>)
+  #      nix hash to-sri --type sha256 $hash
   # 4. Add entry below
   binaries = {
     "0.10.9-nix" = {
