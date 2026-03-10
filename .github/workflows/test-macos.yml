@@ -1,0 +1,25 @@
+name: Test macOS Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - name: Configure Garnix cache
+        run: |
+          # Add Garnix as a substituter to pull cached builds
+          mkdir -p ~/.config/nix
+          echo "extra-substituters = https://cache.garnix.io" >> ~/.config/nix/nix.conf
+          echo "extra-trusted-public-keys = cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=" >> ~/.config/nix/nix.conf
+          cat ~/.config/nix/nix.conf
+
+      - name: Test nix build
+        run: |
+          nix build .#build-0-10-9 --out-link result
+          ./result/bin/uv --version
