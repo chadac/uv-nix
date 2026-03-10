@@ -39,7 +39,7 @@ WARNING: The default installer is just a repackaged binary! If you
 want to do a proper source build, use:
 
 ```bash
-nix profile install github:chadac/uv-nix#src
+nix profile install github:chadac/uv-nix#build
 ```
 
 ### One-time use
