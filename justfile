@@ -8,7 +8,7 @@ build:
         $(find src/ -type f) \
         $(find data/ -type f) \
         $(find patches/ -type f -name '*.patch') \
-        .git/modules/uv/HEAD \
+        data/uv.json \
         -- \
         cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
 
@@ -22,16 +22,12 @@ build-force:
         $(find src/ -type f) \
         $(find data/ -type f) \
         $(find patches/ -type f -name '*.patch') \
-        .git/modules/uv/HEAD \
+        data/uv.json \
         -- \
         cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
 
-# Copy the full workspace Cargo.lock (needed before nix build)
-sync-lockfile:
-    cp uv/Cargo.lock Cargo.lock
-
 # Full nix build (produces self-contained binary)
-nix-build: sync-lockfile
+nix-build:
     nix build
 
 # Check local Rust crate compiles
@@ -39,15 +35,15 @@ check:
     cargo check
 
 # =============================================================================
-# Test commands (Rust-based)
+# Test commands
 # =============================================================================
 
-# Run wheel install tests (wheel-only packages auto-skip if no wheel available)
-test: build
-    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --test-threads=4
+# Run wheel install tests (default)
+test: test-wheel
 
-# Alias for backward compatibility (all tests now run by default, with auto-skip)
-test-all: test
+# Run wheel install tests
+test-wheel: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --test-threads=4
 
 # Run source build tests (slow)
 test-source: build
@@ -57,29 +53,24 @@ test-source: build
 test-patch: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test python_patch
 
+# Run Docker-based integration tests (pytest)
+test-docker: build
+    cd tests/docker && UV_BIN="$(pwd)/../../uv/target/debug/uv" uv run pytest -v -n auto -m 'not slow and not source_build'
+
 # Run a specific package test
 test-pkg PKG: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install {{PKG}}
 
-# Run tests sequentially (for debugging)
+# Run wheel tests sequentially (for debugging)
 test-seq: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --test-threads=1
 
-# Run tests with Docker containers (Linux isolation)
-test-docker: build
-    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --features docker-tests
+# Run all test suites
+test-all: test-wheel test-source test-patch test-docker
 
 # Clear test venv cache
 test-clean:
     rm -rf /tmp/uv-nix-tests
-
-# =============================================================================
-# Legacy pytest tests (deprecated)
-# =============================================================================
-
-# Run old pytest-based tests
-test-legacy *ARGS="-m 'not docker and not slow and not source_build'": build
-    cd tests && uv run pytest -v -n auto {{ARGS}}
 
 # =============================================================================
 # Docker utilities

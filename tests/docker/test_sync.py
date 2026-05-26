@@ -15,7 +15,7 @@ from conftest import run_lib_test
 
 
 # --- Load package-build-libs.json ---
-_data_dir = Path(__file__).parent.parent / "data"
+_data_dir = Path(__file__).parent.parent.parent / "data"
 _build_libs_raw: dict[str, dict] = json.loads(
     (_data_dir / "package-build-libs.json").read_text()
 )

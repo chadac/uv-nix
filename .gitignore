@@ -11,6 +11,9 @@ devenv.local.nix
 # claude
 .claude
 
+# uv source (cloned on demand by scripts/apply-patches.sh)
+/uv
+
 # Added by cargo
 /target
 
@@ -19,3 +22,9 @@ devenv.local.nix
 
 # Test cache (persistent Python installs across runs)
 /.cache
+
+# Rust
+/.cargo
+
+# cached-exec
+/.cached-exec

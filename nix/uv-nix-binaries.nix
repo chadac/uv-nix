@@ -1,31 +1,26 @@
-# nix/uv-nix-sources.nix
-# Pre-built uv-nix binary sources from GitHub releases
+# nix/uv-nix-binaries.nix
+# Pre-built uv-nix binary packages from GitHub releases
 #
-# Usage:
-#   binSources = import ./uv-nix-sources.nix { inherit (pkgs) fetchurl; };
-#   latestBin = binSources.latest "x86_64-linux";  # { version, url, hash, releaseTag }
-#   specificBin = binSources.get "0.10.9" "x86_64-linux";
-{ fetchurl }:
+# Returns an attrset of { bin-<version> = <derivation>; }
+# plus `latest` (the newest binary derivation, or null).
+#
+# To add a new version:
+# 1. Push a tag (e.g., git tag v0.10.9-nix.1 && git push origin v0.10.9-nix.1)
+# 2. Wait for CI to create the release
+# 3. Get hashes using nix-prefetch-url and convert to SRI format:
+#      hash=$(nix-prefetch-url <url>)
+#      nix hash to-sri --type sha256 $hash
+# 4. Add entry below
+{ pkgs }:
 
 let
-  # GitHub release URL base
+  lib = pkgs.lib;
+  system = pkgs.stdenv.hostPlatform.system;
+
+  uvNixLib = import ./lib.nix { inherit lib pkgs; };
+
   releaseBase = "https://github.com/chadac/uv-nix/releases/download";
 
-  # Map of version -> binary info
-  # Each version tracks:
-  #   - releaseTag: the GitHub release tag (e.g., "v0.10.9-nix.1")
-  #   - assets: map of system -> { name, hash } for each binary
-  #
-  # Binaries are published via CI to GitHub Releases as raw executables.
-  # Hashes are populated after each release build.
-  #
-  # To add a new version:
-  # 1. Push a tag (e.g., git tag v0.10.9-nix.1 && git push origin v0.10.9-nix.1)
-  # 2. Wait for CI to create the release
-  # 3. Get hashes using nix-prefetch-url and convert to SRI format:
-  #      hash=$(nix-prefetch-url <url>)
-  #      nix hash to-sri --type sha256 $hash
-  # 4. Add entry below
   binaries = {
     "0.10.9-nix" = {
       releaseTag = "v0.10.9-nix.1";
@@ -45,7 +40,7 @@ let
       };
     };
     "0.10.8-nix" = {
-      releaseTag = "v0.10.9-nix.1";  # All binaries uploaded to same release
+      releaseTag = "v0.10.9-nix.1";
       assets = {
         "x86_64-linux" = {
           name = "uv-nix-0.10.8-linux-x86_64";
@@ -114,59 +109,67 @@ let
     };
   };
 
-  # Build URL for a version and system
-  mkUrl = version: system:
+  mkUrl = version:
     let
       versionData = binaries.${version} or null;
       assetData = if versionData == null then null else versionData.assets.${system} or null;
     in if assetData == null then null
        else "${releaseBase}/${versionData.releaseTag}/${assetData.name}";
 
-  # Get all available versions (sorted newest first)
-  allVersions = builtins.sort (a: b: builtins.compareVersions a b > 0) (builtins.attrNames binaries);
-
-  # Get latest version (or null if none)
-  latestVersion = if allVersions == [] then null else builtins.head allVersions;
-
-in {
-  inherit binaries allVersions latestVersion;
-
-  # Check if any binaries are available
-  hasAny = allVersions != [];
-
-  # Get binary info for a specific version and system (returns null if not found)
-  get = version: system:
+  mkBinaryPackage = version:
     let
       versionData = binaries.${version} or null;
       assetData = if versionData == null then null else versionData.assets.${system} or null;
-      url = mkUrl version system;
+      url = mkUrl version;
     in if assetData == null || url == null then null
-       else {
-         inherit version system url;
-         inherit (assetData) hash;
-         inherit (versionData) releaseTag;
+       else pkgs.stdenv.mkDerivation {
+         pname = "uv-nix-bin";
+         inherit version;
+
+         src = builtins.fetchurl {
+           inherit url;
+           sha256 = assetData.hash;
+         };
+
+         dontUnpack = true;
+
+         nativeBuildInputs = lib.optionals pkgs.stdenv.isLinux [
+           pkgs.autoPatchelfHook
+         ];
+
+         buildInputs = lib.optionals pkgs.stdenv.isLinux (
+           uvNixLib.defaultLibs ++ [
+             pkgs.stdenv.cc.cc.lib
+             pkgs.rust-jemalloc-sys
+           ]
+         );
+
+         installPhase = ''
+           runHook preInstall
+           install -Dm755 $src $out/bin/uv
+           runHook postInstall
+         '';
+
+         meta = {
+           description = "uv Python package manager with Nix integration (pre-built)";
+           mainProgram = "uv";
+         };
        };
 
-  # Check if binary exists for version/system
-  exists = version: system:
-    (binaries.${version}.assets.${system} or null) != null;
+  versionToAttr = v: builtins.replaceStrings ["."] ["-"] v;
 
-  # Get latest binary info for a system (returns null if none available)
-  latest = system:
-    if latestVersion == null then null
-    else let
-      versionData = binaries.${latestVersion};
-      assetData = versionData.assets.${system} or null;
-      url = mkUrl latestVersion system;
-    in if assetData == null || url == null then null
-       else {
-         version = latestVersion;
-         inherit url;
-         inherit (assetData) hash;
-         inherit (versionData) releaseTag;
-       };
+  allVersions = builtins.sort (a: b: builtins.compareVersions a b > 0) (builtins.attrNames binaries);
+  latestVersion = if allVersions == [] then null else builtins.head allVersions;
 
-  # List versions available for a specific system
-  versionsForSystem = system:
-    builtins.filter (v: (binaries.${v}.assets.${system} or null) != null) allVersions;
-}
+  packages = builtins.listToAttrs (
+    builtins.filter (x: x.value != null) (
+      map (version: {
+        name = "bin-${versionToAttr version}";
+        value = mkBinaryPackage version;
+      }) allVersions
+    )
+  );
+
+  latest = if latestVersion != null then mkBinaryPackage latestVersion else null;
+
+in packages // lib.optionalAttrs (latest != null) { inherit latest; }

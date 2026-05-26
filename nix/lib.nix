@@ -1,7 +1,7 @@
 # nix/lib.nix
-# Library helpers for uv-nix
-#
-# Provides platform-aware library resolution from default-libs.json
+# Resolves data/default-libs.json into actual nixpkgs derivations.
+# Used by uv-nix-binaries.nix to provide buildInputs (autoPatchelfHook)
+# for pre-built binary packages.
 { lib, pkgs }:
 
 let

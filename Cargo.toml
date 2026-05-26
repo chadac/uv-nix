@@ -19,8 +19,6 @@ serde_json = { version = "1" }
 
 [features]
 default = []
-docker-tests = []
-slow-tests = []
 
 [[test]]
 name = "wheel_install"

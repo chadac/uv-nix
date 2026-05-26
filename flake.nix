@@ -17,109 +17,15 @@
 
       perSystem = { pkgs, system, lib, ... }:
         let
-          # Import source definitions
-          sources = import ./nix/sources.nix { inherit (pkgs) fetchFromGitHub; };
-          binSources = import ./nix/uv-nix-sources.nix { inherit (pkgs) fetchurl; };
-
-          # Import library helpers
-          uvNixLib = import ./nix/lib.nix { inherit lib pkgs; };
-
-          # Import build function
-          buildUv = pkgs.callPackage ./. {};
-
-          # Filter self to only include files needed for uv-nix build
-          # This prevents cache invalidation when unrelated files change (e.g., CI configs)
-          uvNixSrc = lib.fileset.toSource {
-            root = ./.;
-            fileset = lib.fileset.unions [
-              ./Cargo.toml
-              ./src
-              ./data
-              ./patches
-            ];
-          };
-
-          # Build a source version
-          mkSourceBuild = { version, src }: buildUv {
-            uvSrc = src;
-            inherit version;
-            inherit uvNixSrc;
-          };
-
-          # Build a pre-built binary package with autoPatchelfHook
-          mkBinaryPackage = version:
-            let
-              binInfo = binSources.get version system;
-            in if binInfo == null then null
-               else pkgs.stdenv.mkDerivation {
-                 pname = "uv-nix-bin";
-                 inherit version;
-
-                # Fetch raw binary from GitHub release using builtins.fetchurl
-                # This avoids the reference checking that pkgs.fetchurl does
-                src = builtins.fetchurl {
-                  url = binInfo.url;
-                  sha256 = binInfo.hash;
-                };
-
-                 dontUnpack = true;
-
-                 nativeBuildInputs = lib.optionals pkgs.stdenv.isLinux [
-                   pkgs.autoPatchelfHook
-                 ];
-
-                 buildInputs = lib.optionals pkgs.stdenv.isLinux (
-                   uvNixLib.defaultLibs ++ [
-                     pkgs.stdenv.cc.cc.lib   # libstdc++
-                     pkgs.rust-jemalloc-sys  # libjemalloc.so.2 with Rust prefix
-                   ]
-                 );
-
-                 installPhase = ''
-                   runHook preInstall
-                   install -Dm755 $src $out/bin/uv
-                   runHook postInstall
-                 '';
-
-                 meta = {
-                   description = "uv Python package manager with Nix integration (pre-built)";
-                   mainProgram = "uv";
-                 };
-               };
-
-          # Helper to convert version dots to dashes for attribute names
-          versionToAttr = v: builtins.replaceStrings ["."] ["-"] v;
-
-          # Generate packages for all source versions
-          sourcePackages = builtins.listToAttrs (map (v: {
-            name = "build-${versionToAttr v.version}";
-            value = mkSourceBuild v;
-          }) sources.all);
-
-          # Generate packages for all binary versions (filter out nulls)
-          binaryPackages = builtins.listToAttrs (
-            builtins.filter (x: x.value != null) (
-              map (version: {
-                name = "bin-${versionToAttr version}";
-                value = mkBinaryPackage version;
-              }) binSources.allVersions
-            )
-          );
-
-          # Latest versions
-          latestSource = mkSourceBuild sources.latest;
-          latestBinary = if binSources.latestVersion != null
-                         then mkBinaryPackage binSources.latestVersion
-                         else null;
-
+          package = pkgs.callPackage ./. {};
+          binaries = import ./nix/uv-nix-binaries.nix { inherit pkgs; };
         in {
-          packages = sourcePackages // binaryPackages // {
-            # Aliases for latest
-            default = if latestBinary != null then latestBinary else latestSource;
-            build = latestSource;
-          } // lib.optionalAttrs (latestBinary != null) {
-            bin = latestBinary;
-          };
+          packages = {
+            default = package;
+            src = package;
+          } // lib.optionalAttrs (binaries.latest or null != null) {
+            bin = binaries.latest;
+          } // binaries;
 
           devShells.default = pkgs.mkShell {
             buildInputs = [
@@ -134,6 +40,7 @@
               pkgs.openssl
               pkgs.pkg-config
               # Dev tools
+              pkgs.jq
               cached-exec.packages.${system}.default
             ] ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.apple-sdk
@@ -146,18 +53,5 @@
             '';
           };
         };
-
-      # Flake-level outputs (not per-system)
-      flake = {
-        # Expose lib per-system (for patchPython)
-        lib = builtins.listToAttrs (map (system: {
-          name = system;
-          value = let
-            pkgs = nixpkgs.legacyPackages.${system};
-          in {
-            patchPython = pkgs.callPackage ./nix/patch-python.nix { inherit pkgs; };
-          };
-        }) (import systems));
-      };
     };
 }

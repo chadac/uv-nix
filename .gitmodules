@@ -1,3 +1,0 @@
-[submodule "uv"]
-	path = uv
-	url = https://github.com/astral-sh/uv.git

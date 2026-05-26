@@ -2,25 +2,39 @@
 # Core build logic for uv-nix from source
 #
 # Usage:
-#   buildUv = pkgs.callPackage ./. {};
-#   uv = buildUv { uvSrc = ...; version = "0.10.8"; };
+#   uv = pkgs.callPackage ./. {};
 { lib
 , stdenv
 , rustPlatform
 , installShellFiles
 , rust-jemalloc-sys
-}:
-
-{ uvSrc           # Upstream uv source (from sources.nix or flake input)
-, version         # Version string (e.g., "0.10.8")
-, uvNixSrc ? ./.  # Path to uv-nix sources (defaults to this repo)
-, doCheck ? false # Whether to run tests
+, fetchFromGitHub
+, doCheck ? false
 }:
 
 let
+  uvMeta = builtins.fromJSON (builtins.readFile ./data/uv.json);
+
+  uvSrc = fetchFromGitHub {
+    owner = "astral-sh";
+    repo = "uv";
+    rev = uvMeta.version;
+    hash = uvMeta.hash;
+  };
+
+  uvNixSrc = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [
+      ./Cargo.toml
+      ./src
+      ./data
+      ./patches
+    ];
+  };
+
   # Create patched source combining uv + uv-nix
   patchedSrc = stdenv.mkDerivation {
-    name = "uv-nix-src-${version}";
+    name = "uv-nix-src-${uvMeta.version}";
     src = uvSrc;
     phases = [ "unpackPhase" "patchPhase" "installPhase" ];
 
@@ -38,10 +52,10 @@ let
       sed -i '/^uv-normalize = /a uv-nix = { version = "0.0.1", path = "crates/uv-nix" }' Cargo.toml
     '';
     patches = [
-      "${uvNixSrc}/patches/02-uv-cli-nix-commands.patch"
-      "${uvNixSrc}/patches/03-uv-crate-nix-dispatch.patch"
-      "${uvNixSrc}/patches/04-uv-python-nix-hook.patch"
-      "${uvNixSrc}/patches/05-uv-dispatch-nix-build-env.patch"
+      "${uvNixSrc}/patches/01-uv-cli-nix-commands.patch"
+      "${uvNixSrc}/patches/02-uv-crate-nix-dispatch.patch"
+      "${uvNixSrc}/patches/03-uv-python-nix-hook.patch"
+      "${uvNixSrc}/patches/04-uv-dispatch-nix-build-env.patch"
     ];
 
     installPhase = ''
@@ -51,7 +65,7 @@ let
 
 in rustPlatform.buildRustPackage {
   pname = "uv";
-  version = "${version}-nix";
+  version = "${uvMeta.version}-nix";
 
   src = patchedSrc;
 
