@@ -140,8 +140,10 @@ pub fn nix_hello(name: Option<String>) -> anyhow::Result<()> {
 }
 
 /// Called automatically after wheel installs to patch `.so` files for NixOS compatibility.
+///
+/// Patches all native binaries in site-packages, skipping those that have already
+/// been patched (detected by checking if the RPATH already contains `/nix/store`).
 pub fn post_install_patch(site_packages: &Path) {
-    status("Patching", &format!("ELF binaries in {}", site_packages.display()));
     let mut patch_config = patchelf::PatchConfig::from_env();
 
     // Resolve extra libraries from [tool.uv-nix] in pyproject.toml
@@ -151,10 +153,8 @@ pub fn post_install_patch(site_packages: &Path) {
         }
     }
 
-    debug!(
-        "Patching ELF binaries in site-packages: {}",
-        site_packages.display()
-    );
+    status("Patching", &format!("ELF binaries in {}", site_packages.display()));
+
     if let Err(err) = patchelf::patch_directory(site_packages, &patch_config) {
         status_warn(&format!("Failed to patch site-packages: {err}"));
     }

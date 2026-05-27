@@ -11,9 +11,6 @@ on:
     tags:
       - 'v*'
 
-# Explicitly exclude PRs - only run on main branch
-# PRs will not trigger this workflow
-
 jobs:
   # Wait for Garnix to complete before publishing
   wait-for-garnix:
@@ -21,7 +18,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
-      (github.event_name == 'check_suite' && 
+      (github.event_name == 'check_suite' &&
        github.event.check_suite.app.slug == 'garnix-ci' &&
        github.event.check_suite.conclusion == 'success' &&
        github.event.check_suite.head_branch == 'main')
@@ -35,113 +32,80 @@ jobs:
           echo "should_publish=true" >> $GITHUB_OUTPUT
           echo "Garnix build completed successfully, proceeding to publish artifacts"
 
-  # Fetch artifacts from Garnix cache and publish
+  # Build and publish x86_64-linux artifact
   publish-linux:
     needs: wait-for-garnix
     if: needs.wait-for-garnix.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        version:
-          - "0.10.9"
-          - "0.10.8"
-          - "0.10.7"
-          - "0.10.6"
-          - "0.10.5"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: cachix/install-nix-action@v31
 
-      - name: Fetch build-${{ matrix.version }} from cache
+      - name: Fetch from Garnix cache
         id: fetch
         run: |
-          VERSION_ATTR=$(echo "${{ matrix.version }}" | tr '.' '-')
-          echo "Building/fetching packages.x86_64-linux.build-${VERSION_ATTR}"
-          nix build .#build-${VERSION_ATTR} --out-link result -L \
+          nix build .#default --out-link result -L \
             --extra-substituters "https://cache.garnix.io" \
             --extra-trusted-public-keys "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
-          
-          # Extract version from binary
           ACTUAL_VERSION=$(./result/bin/uv --version | awk '{print $2}')
           echo "version=$ACTUAL_VERSION" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: uv-nix-${{ steps.fetch.outputs.version }}-linux-x86_64
           path: result/bin/uv
           retention-days: 90
 
-  # Fetch aarch64-linux artifacts from Garnix cache
+  # Build and publish aarch64-linux artifact
   publish-linux-arm:
     needs: wait-for-garnix
     if: needs.wait-for-garnix.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        version:
-          - "0.10.9"
-          - "0.10.8"
-          - "0.10.7"
-          - "0.10.6"
-          - "0.10.5"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: cachix/install-nix-action@v31
 
-      - name: Fetch build-${{ matrix.version }} from cache
+      - name: Fetch from Garnix cache
         id: fetch
         run: |
-          VERSION_ATTR=$(echo "${{ matrix.version }}" | tr '.' '-')
-          echo "Building/fetching packages.aarch64-linux.build-${VERSION_ATTR}"
-          nix build .#packages.aarch64-linux.build-${VERSION_ATTR} --out-link result -L \
+          nix build .#packages.aarch64-linux.default --out-link result -L \
             --extra-substituters "https://cache.garnix.io" \
             --extra-trusted-public-keys "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
-          
-          # Extract version from binary (can't run ARM binary on x86, so use the version matrix)
-          echo "version=${{ matrix.version }}-nix" >> $GITHUB_OUTPUT
+          # Read version from data/uv.json (can't run ARM binary on x86)
+          UV_VERSION=$(jq -r .version data/uv.json)
+          echo "version=${UV_VERSION}-nix" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: uv-nix-${{ steps.fetch.outputs.version }}-linux-aarch64
           path: result/bin/uv
           retention-days: 90
 
+  # Build and publish aarch64-darwin artifact
   publish-macos:
     needs: wait-for-garnix
     if: needs.wait-for-garnix.outputs.should_publish == 'true'
     runs-on: macos-latest
-    strategy:
-      matrix:
-        version:
-          - "0.10.9"
-          - "0.10.8"
-          - "0.10.7"
-          - "0.10.6"
-          - "0.10.5"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: cachix/install-nix-action@v31
 
-      - name: Fetch build-${{ matrix.version }} from cache
+      - name: Fetch from Garnix cache
         id: fetch
         run: |
-          VERSION_ATTR=$(echo "${{ matrix.version }}" | tr '.' '-')
-          echo "Building/fetching packages.aarch64-darwin.build-${VERSION_ATTR}"
-          nix build .#build-${VERSION_ATTR} --out-link result -L \
+          nix build .#default --out-link result -L \
             --extra-substituters "https://cache.garnix.io" \
             --extra-trusted-public-keys "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
-          
-          # Extract version from binary
           ACTUAL_VERSION=$(./result/bin/uv --version | awk '{print $2}')
           echo "version=$ACTUAL_VERSION" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: uv-nix-${{ steps.fetch.outputs.version }}-darwin-arm64
           path: result/bin/uv
@@ -155,10 +119,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -172,7 +136,7 @@ jobs:
           ls -la release/
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: release/*
           generate_release_notes: true

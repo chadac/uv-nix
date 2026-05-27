@@ -17,7 +17,7 @@ index cbe1da090..3ab300138 100644
 @@ -850,6 +850,11 @@ async fn execute_plan(
              // task.
              .install_blocking(installs)?;
- 
+
 +        // Patch ELF binaries for NixOS compatibility.
 +        for site_packages_dir in venv.site_packages() {
 +            uv_nix::post_install_patch(&site_packages_dir);

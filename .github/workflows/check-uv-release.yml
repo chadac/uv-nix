@@ -1,0 +1,122 @@
+name: Check for new uv release
+
+on:
+  schedule:
+    # Check every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get current version
+        id: current
+        run: |
+          CURRENT=$(jq -r .version data/uv.json)
+          echo "version=$CURRENT" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT"
+
+      - name: Get latest uv release
+        id: latest
+        run: |
+          LATEST=$(gh api repos/astral-sh/uv/releases/latest --jq '.tag_name')
+          echo "version=$LATEST" >> $GITHUB_OUTPUT
+          echo "Latest release: $LATEST"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Check if update needed
+        id: check
+        run: |
+          if [ "${{ steps.current.outputs.version }}" = "${{ steps.latest.outputs.version }}" ]; then
+            echo "Already up to date"
+            echo "needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "New version available: ${{ steps.latest.outputs.version }}"
+            echo "needed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if PR already exists
+        if: steps.check.outputs.needed == 'true'
+        id: existing_pr
+        run: |
+          PR=$(gh pr list --search "upgrade uv to ${{ steps.latest.outputs.version }}" --json number --jq '.[0].number // empty')
+          if [ -n "$PR" ]; then
+            echo "PR #$PR already exists"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - uses: cachix/install-nix-action@v31
+        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
+
+      - name: Update uv version
+        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
+        run: |
+          NEW_VERSION="${{ steps.latest.outputs.version }}"
+
+          # Get the source hash using nix-prefetch-url (returns base32)
+          BASE32=$(nix-prefetch-url --unpack "https://github.com/astral-sh/uv/archive/refs/tags/${NEW_VERSION}.tar.gz" 2>/dev/null)
+          # Convert to SRI format (sha256-base64=)
+          SRI_HASH=$(nix hash to-sri --type sha256 "$BASE32")
+          # Convert sha256-xxx to sha256:xxx (format used in data/uv.json)
+          HASH=$(echo "$SRI_HASH" | sed 's/^sha256-/sha256:/')
+
+          # Update data/uv.json
+          jq --arg v "$NEW_VERSION" --arg h "$HASH" \
+            '.version = $v | .hash = $h' \
+            data/uv.json > data/uv.json.tmp
+          mv data/uv.json.tmp data/uv.json
+
+          echo "Updated data/uv.json:"
+          cat data/uv.json
+
+      - name: Update Cargo.lock
+        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
+        run: |
+          # Apply patches to get the workspace set up, then update lockfile
+          nix develop --command bash scripts/apply-patches.sh
+          nix develop --command bash scripts/update-lockfile.sh
+
+      - name: Create PR
+        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
+        run: |
+          NEW_VERSION="${{ steps.latest.outputs.version }}"
+          BRANCH="auto/upgrade-uv-${NEW_VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git add data/uv.json data/Cargo.lock
+          git commit -m "refactor: upgrade uv to ${NEW_VERSION}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "refactor: upgrade uv to ${NEW_VERSION}" \
+            --body "## Summary
+
+          Automated upgrade to uv [${NEW_VERSION}](https://github.com/astral-sh/uv/releases/tag/${NEW_VERSION}).
+
+          - Updated \`data/uv.json\` with new version and source hash
+          - Updated \`data/Cargo.lock\` for the patched workspace
+
+          ## Checklist
+
+          - [ ] Garnix builds pass
+          - [ ] Merge to trigger artifact publishing
+
+          Generated automatically by the check-uv-release workflow." \
+            --label "automated"
+        env:
+          GH_TOKEN: ${{ github.token }}

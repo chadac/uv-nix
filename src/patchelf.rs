@@ -207,6 +207,12 @@ fn patch_elf_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default();
 
+        // Skip if already patched (Nix store paths present in RPATH)
+        if existing.contains("/nix/store") {
+            debug!("Already patched, skipping: {}", path.display());
+            return Ok(());
+        }
+
         // Build the final RPATH:
         // 1. Keep existing RPATH (preserves $ORIGIN paths from wheels)
         // 2. Ensure $ORIGIN is present (so sibling bundled libs can find each other)

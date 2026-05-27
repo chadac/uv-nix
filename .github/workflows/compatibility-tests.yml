@@ -1,6 +1,10 @@
 name: Compatibility Tests
 
 on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       test_scope:
@@ -23,14 +27,15 @@ on:
 
 jobs:
   test-ubuntu:
-    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'ubuntu-only' }}
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.platforms == 'all' ||
+      inputs.platforms == 'ubuntu-only'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v6
 
-      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: cachix/install-nix-action@v31
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -40,22 +45,23 @@ jobs:
         run: nix develop --command just build
 
       - name: Run core tests
-        if: ${{ inputs.test_scope == 'core' }}
+        if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core'
         run: nix develop --command just test
 
       - name: Run all tests
-        if: ${{ inputs.test_scope == 'all' }}
+        if: github.event_name == 'workflow_dispatch' && inputs.test_scope == 'all'
         run: nix develop --command just test-all
 
   test-macos:
-    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'macos-only' }}
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.platforms == 'all' ||
+      inputs.platforms == 'macos-only'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v6
 
-      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: cachix/install-nix-action@v31
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -65,9 +71,9 @@ jobs:
         run: nix develop --command just build
 
       - name: Run core tests
-        if: ${{ inputs.test_scope == 'core' }}
+        if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core'
         run: nix develop --command just test
 
       - name: Run all tests
-        if: ${{ inputs.test_scope == 'all' }}
+        if: github.event_name == 'workflow_dispatch' && inputs.test_scope == 'all'
         run: nix develop --command just test-all
