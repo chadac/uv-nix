@@ -2,6 +2,9 @@
 //!
 //! Measures time for each stage: venv creation, pip install (with patching),
 //! and import verification. Outputs timing in a format suitable for CI reporting.
+//!
+//! When uv is built with `UV_NIX_TIMING=1`, the install step also reports
+//! a breakdown of nix config resolution, binary discovery, and patching.
 
 mod common;
 
@@ -10,12 +13,55 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
+/// Parsed timing from `uv-nix-timing:` line in stderr.
+#[derive(Default)]
+struct PatchTiming {
+    nix_resolve_ms: u128,
+    find_binaries_ms: u128,
+    num_binaries: usize,
+    patch_ms: u128,
+}
+
+/// Parse all `uv-nix-timing:` lines from stderr and sum them up.
+/// Multiple lines may appear (one per site-packages directory).
+fn parse_patch_timing(stderr: &str) -> Option<PatchTiming> {
+    let mut total = PatchTiming::default();
+    let mut found = false;
+    for line in stderr.lines() {
+        if let Some(rest) = line.strip_prefix("uv-nix-timing:") {
+            found = true;
+            for part in rest.split_whitespace() {
+                if let Some(val) = part.strip_prefix("nix_resolve=").and_then(|s| s.strip_suffix("ms")) {
+                    total.nix_resolve_ms += val.parse::<u128>().unwrap_or(0);
+                } else if let Some(val) = part.strip_prefix("find_binaries=").and_then(|s| s.strip_suffix("ms")) {
+                    total.find_binaries_ms += val.parse::<u128>().unwrap_or(0);
+                } else if let Some(val) = part.strip_prefix("patch=").and_then(|s| s.strip_suffix("ms")) {
+                    total.patch_ms += val.parse::<u128>().unwrap_or(0);
+                } else if let Some(val) = part.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+                    // "(N files)" — but we split by whitespace so this comes as "(N" and "files)"
+                    if let Ok(n) = val.strip_suffix("files)").unwrap_or(val).parse::<usize>() {
+                        total.num_binaries += n;
+                    }
+                }
+                // Handle the "N" from "(N files)" split
+                if part.starts_with('(') {
+                    if let Ok(n) = part.trim_start_matches('(').parse::<usize>() {
+                        total.num_binaries += n;
+                    }
+                }
+            }
+        }
+    }
+    if found { Some(total) } else { None }
+}
+
 /// Benchmark result for a single package install
 struct BenchResult {
     package: String,
     venv_ms: u128,
     install_ms: u128,
     import_ms: u128,
+    patch_timing: Option<PatchTiming>,
     success: bool,
     error: Option<String>,
 }
@@ -50,6 +96,7 @@ fn bench_package(package: &str, import_check: &str) -> BenchResult {
             venv_ms,
             install_ms: 0,
             import_ms: 0,
+            patch_timing: None,
             success: false,
             error: Some(format!(
                 "venv failed: {}",
@@ -61,6 +108,7 @@ fn bench_package(package: &str, import_check: &str) -> BenchResult {
     let python = venv_path.join("bin/python");
 
     // Stage 2: Install package (includes download + patch)
+    // Set UV_NIX_TIMING=1 to get patch timing breakdown
     let start = Instant::now();
     let install_out = Command::new(UV_BIN.as_path())
         .args([
@@ -68,9 +116,13 @@ fn bench_package(package: &str, import_check: &str) -> BenchResult {
             "--python", python.to_str().unwrap(),
             package,
         ])
+        .env("UV_NIX_TIMING", "1")
         .output()
         .expect("install command failed");
     let install_ms = start.elapsed().as_millis();
+
+    let install_stderr = String::from_utf8_lossy(&install_out.stderr).to_string();
+    let patch_timing = parse_patch_timing(&install_stderr);
 
     if !install_out.status.success() {
         let _ = std::fs::remove_dir_all(&venv_path);
@@ -79,11 +131,9 @@ fn bench_package(package: &str, import_check: &str) -> BenchResult {
             venv_ms,
             install_ms,
             import_ms: 0,
+            patch_timing,
             success: false,
-            error: Some(format!(
-                "install failed: {}",
-                String::from_utf8_lossy(&install_out.stderr)
-            )),
+            error: Some(format!("install failed: {install_stderr}")),
         };
     }
 
@@ -113,6 +163,7 @@ fn bench_package(package: &str, import_check: &str) -> BenchResult {
         venv_ms,
         install_ms,
         import_ms,
+        patch_timing,
         success,
         error,
     }
@@ -121,19 +172,53 @@ fn bench_package(package: &str, import_check: &str) -> BenchResult {
 /// Format benchmark results as a markdown table.
 fn format_markdown(results: &[BenchResult]) -> String {
     let mut md = String::new();
-    md.push_str("| Package | Venv | Install | Import | Total | Status |\n");
-    md.push_str("|---------|-----:|--------:|-------:|------:|--------|\n");
-    for r in results {
-        let status = if r.success { "pass" } else { "FAIL" };
-        md.push_str(&format!(
-            "| {} | {}ms | {}ms | {}ms | {}ms | {} |\n",
-            r.package,
-            r.venv_ms,
-            r.install_ms,
-            r.import_ms,
-            r.total_ms(),
-            status,
-        ));
+
+    // Check if any result has patch timing
+    let has_timing = results.iter().any(|r| r.patch_timing.is_some());
+
+    if has_timing {
+        md.push_str("| Package | Venv | Install | Nix Resolve | Find | Patch | Files | Import | Total | Status |\n");
+        md.push_str("|---------|-----:|--------:|------------:|-----:|------:|------:|-------:|------:|--------|\n");
+        for r in results {
+            let status = if r.success { "pass" } else { "FAIL" };
+            let (nix_resolve, find, patch, files) = match &r.patch_timing {
+                Some(t) => (
+                    format!("{}ms", t.nix_resolve_ms),
+                    format!("{}ms", t.find_binaries_ms),
+                    format!("{}ms", t.patch_ms),
+                    format!("{}", t.num_binaries),
+                ),
+                None => ("-".into(), "-".into(), "-".into(), "-".into()),
+            };
+            md.push_str(&format!(
+                "| {} | {}ms | {}ms | {} | {} | {} | {} | {}ms | {}ms | {} |\n",
+                r.package,
+                r.venv_ms,
+                r.install_ms,
+                nix_resolve,
+                find,
+                patch,
+                files,
+                r.import_ms,
+                r.total_ms(),
+                status,
+            ));
+        }
+    } else {
+        md.push_str("| Package | Venv | Install | Import | Total | Status |\n");
+        md.push_str("|---------|-----:|--------:|-------:|------:|--------|\n");
+        for r in results {
+            let status = if r.success { "pass" } else { "FAIL" };
+            md.push_str(&format!(
+                "| {} | {}ms | {}ms | {}ms | {}ms | {} |\n",
+                r.package,
+                r.venv_ms,
+                r.install_ms,
+                r.import_ms,
+                r.total_ms(),
+                status,
+            ));
+        }
     }
     md
 }

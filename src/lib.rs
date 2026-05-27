@@ -139,11 +139,25 @@ pub fn nix_hello(name: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Check if timing instrumentation is enabled via `UV_NIX_TIMING=1`.
+fn timing_enabled() -> bool {
+    std::env::var("UV_NIX_TIMING").map_or(false, |v| v == "1")
+}
+
 /// Called automatically after wheel installs to patch `.so` files for NixOS compatibility.
 ///
 /// Patches all native binaries in site-packages, skipping those that have already
 /// been patched (detected by checking if the RPATH already contains `/nix/store`).
+///
+/// When `UV_NIX_TIMING=1` is set, emits a structured timing line to stderr:
+/// `uv-nix-timing: nix_resolve=Xms find_binaries=Xms (N files) patch=Xms total=Xms`
 pub fn post_install_patch(site_packages: &Path) {
+    use std::time::Instant;
+    let timing = timing_enabled();
+    let t_total = Instant::now();
+
+    // Stage 1: Nix config resolution
+    let t0 = Instant::now();
     let mut patch_config = patchelf::PatchConfig::from_env();
 
     // Resolve extra libraries from [tool.uv-nix] in pyproject.toml
@@ -152,13 +166,32 @@ pub fn post_install_patch(site_packages: &Path) {
             patch_config.rpath.push(PathBuf::from(path));
         }
     }
+    let nix_resolve_ms = t0.elapsed().as_millis();
+
+    // Stage 2: Find native binaries
+    let t1 = Instant::now();
+    let binaries = patchelf::find_native_binaries(site_packages, patch_config.is_darwin);
+    let find_ms = t1.elapsed().as_millis();
+    let n_binaries = binaries.len();
 
     debug!(
-        "Patching ELF binaries in site-packages: {}",
+        "Patching {} binaries in site-packages: {}",
+        n_binaries,
         site_packages.display()
     );
-    if let Err(err) = patchelf::patch_directory(site_packages, &patch_config) {
-        status_warn(&format!("Failed to patch site-packages: {err}"));
+
+    // Stage 3: Patch binaries
+    let t2 = Instant::now();
+    patchelf::patch_binaries(&binaries, &patch_config);
+    let patch_ms = t2.elapsed().as_millis();
+
+    let total_ms = t_total.elapsed().as_millis();
+
+    if timing {
+        eprintln!(
+            "uv-nix-timing: nix_resolve={}ms find_binaries={}ms ({} files) patch={}ms total={}ms",
+            nix_resolve_ms, find_ms, n_binaries, patch_ms, total_ms
+        );
     }
 }
 

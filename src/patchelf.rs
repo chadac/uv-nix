@@ -323,6 +323,18 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Patch a list of native binaries (platform-aware).
+///
+/// This is the core patching loop, separated from directory scanning
+/// so callers can time each stage independently.
+pub fn patch_binaries(binaries: &[PathBuf], config: &PatchConfig) {
+    binaries.par_iter().for_each(|binary| {
+        if let Err(err) = patch_binary(binary, config) {
+            warn!("Failed to patch {}: {err}", binary.display());
+        }
+    });
+}
+
 /// Patch all native binaries found in a directory (platform-aware).
 ///
 /// On Linux: finds and patches ELF binaries with `patchelf`.
@@ -336,10 +348,6 @@ pub fn patch_directory(dir: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         binary_type,
         dir.display()
     );
-    binaries.par_iter().for_each(|binary| {
-        if let Err(err) = patch_binary(binary, config) {
-            warn!("Failed to patch {}: {err}", binary.display());
-        }
-    });
+    patch_binaries(&binaries, config);
     Ok(())
 }
