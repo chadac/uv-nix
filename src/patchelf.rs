@@ -111,6 +111,15 @@ fn is_macho(path: &Path) -> bool {
     )
 }
 
+/// Check if a file is a native binary (ELF on Linux, Mach-O on Darwin).
+pub fn is_native_binary(path: &Path, is_darwin: bool) -> bool {
+    if is_darwin {
+        is_macho(path)
+    } else {
+        is_elf(path)
+    }
+}
+
 /// Find ELF binaries in a directory by checking for `.so` extensions and ELF magic bytes.
 pub fn find_elf_binaries(dir: &Path) -> Vec<PathBuf> {
     let mut results = Vec::new();
@@ -207,6 +216,12 @@ fn patch_elf_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default();
 
+        // Skip if already patched (Nix store paths present in RPATH)
+        if existing.contains("/nix/store") {
+            debug!("Already patched, skipping: {}", path.display());
+            return Ok(());
+        }
+
         // Build the final RPATH:
         // 1. Keep existing RPATH (preserves $ORIGIN paths from wheels)
         // 2. Ensure $ORIGIN is present (so sibling bundled libs can find each other)
@@ -271,33 +286,78 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Add each rpath entry using install_name_tool -add_rpath
-    for rpath_entry in &config.rpath {
-        let rpath_str = rpath_entry.to_string_lossy();
-        
-        let mut cmd = Command::new(&config.patcher);
-        cmd.arg("-add_rpath").arg(rpath_str.as_ref()).arg(path);
-        debug!("Running: {:?}", cmd);
-
-        let output = cmd.output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let msg = stderr.trim();
-            // "would duplicate path" means the rpath already exists, which is fine
-            if msg.contains("would duplicate path") {
-                debug!("Rpath {} already exists in {}", rpath_str, path.display());
-            } else {
-                // Log but don't fail - some binaries may not be writable
-                warn!(
-                    "install_name_tool -add_rpath failed on {}: {}",
-                    path.display(),
-                    msg
-                );
+    // Check existing rpaths to skip already-patched binaries.
+    // Use otool -l to read LC_RPATH entries; if any point to /nix/store, skip.
+    let existing_output = Command::new("otool")
+        .arg("-l")
+        .arg(path)
+        .output()
+        .ok();
+    if let Some(ref out) = existing_output {
+        if out.status.success() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if stdout.contains("/nix/store") {
+                debug!("Already patched, skipping: {}", path.display());
+                return Ok(());
             }
         }
     }
 
+    // Add all rpath entries in a single install_name_tool invocation.
+    // install_name_tool supports multiple -add_rpath flags at once, which
+    // avoids spawning one process per rpath entry (~80 entries × N binaries).
+    let mut cmd = Command::new(&config.patcher);
+    for rpath_entry in &config.rpath {
+        cmd.arg("-add_rpath").arg(rpath_entry);
+    }
+    cmd.arg(path);
+    debug!("Running: {:?}", cmd);
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = stderr.trim();
+        // "would duplicate path" means some rpaths already exist, which is fine
+        if msg.contains("would duplicate path") {
+            debug!("Some rpaths already exist in {}, adding individually", path.display());
+            // Fall back to one-at-a-time to skip duplicates
+            for rpath_entry in &config.rpath {
+                let mut single = Command::new(&config.patcher);
+                single.arg("-add_rpath").arg(rpath_entry).arg(path);
+                let out = single.output()?;
+                if !out.status.success() {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    if !err.contains("would duplicate path") {
+                        warn!(
+                            "install_name_tool -add_rpath failed on {}: {}",
+                            path.display(),
+                            err.trim()
+                        );
+                    }
+                }
+            }
+        } else {
+            warn!(
+                "install_name_tool -add_rpath failed on {}: {}",
+                path.display(),
+                msg
+            );
+        }
+    }
+
     Ok(())
+}
+
+/// Patch a list of native binaries (platform-aware).
+///
+/// This is the core patching loop, separated from directory scanning
+/// so callers can time each stage independently.
+pub fn patch_binaries(binaries: &[PathBuf], config: &PatchConfig) {
+    binaries.par_iter().for_each(|binary| {
+        if let Err(err) = patch_binary(binary, config) {
+            warn!("Failed to patch {}: {err}", binary.display());
+        }
+    });
 }
 
 /// Patch all native binaries found in a directory (platform-aware).
@@ -313,10 +373,6 @@ pub fn patch_directory(dir: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         binary_type,
         dir.display()
     );
-    binaries.par_iter().for_each(|binary| {
-        if let Err(err) = patch_binary(binary, config) {
-            warn!("Failed to patch {}: {err}", binary.display());
-        }
-    });
+    patch_binaries(&binaries, config);
     Ok(())
 }

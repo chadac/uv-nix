@@ -14,18 +14,24 @@ diff --git a/crates/uv/src/commands/pip/operations.rs b/crates/uv/src/commands/p
 index cbe1da090..3ab300138 100644
 --- a/crates/uv/src/commands/pip/operations.rs
 +++ b/crates/uv/src/commands/pip/operations.rs
-@@ -850,6 +850,11 @@ async fn execute_plan(
+@@ -850,6 +850,17 @@ async fn execute_plan(
              // task.
              .install_blocking(installs)?;
- 
-+        // Patch ELF binaries for NixOS compatibility.
+
++        // Patch native binaries for Nix compatibility.
++        // Build dist-info prefixes (e.g. "numpy-2.4.6") so uv-nix can find
++        // exactly which files were just installed via their RECORD files.
++        let nix_dist_prefixes: Vec<String> = installs
++            .iter()
++            .map(|d| format!("{}-{}", d.filename().name.as_dist_info_name(), d.filename().version))
++            .collect();
 +        for site_packages_dir in venv.site_packages() {
-+            uv_nix::post_install_patch(&site_packages_dir);
++            uv_nix::post_install_patch(&site_packages_dir, &nix_dist_prefixes);
 +        }
 +
          logger.on_install(installs.len(), start, printer, DryRun::Disabled)?;
      }
- 
+
 diff --git a/crates/uv/src/commands/python/install.rs b/crates/uv/src/commands/python/install.rs
 index 8297bcfb9..8c7120994 100644
 --- a/crates/uv/src/commands/python/install.rs
@@ -36,7 +42,7 @@ index 8297bcfb9..8c7120994 100644
          }
 +        // Patch ELF binaries for NixOS compatibility.
 +        uv_nix::post_python_install_patch(installation.path());
- 
+
          let upgradeable = (default || is_default_install)
              || requested_minor_versions.contains(&installation.key().version().python_version());
 diff --git a/crates/uv/src/lib.rs b/crates/uv/src/lib.rs

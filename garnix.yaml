@@ -1,38 +1,22 @@
 # Garnix CI configuration
-# https://garnix.io/docs/yaml_config
+# https://garnix.io/docs/ci/yaml_config/
 
 builds:
-  # Build all source versions for all platforms
+  branch: main
   include:
-    # Linux x86_64
+    # Source build (current version from data/uv.json)
     - "packages.x86_64-linux.default"
-    - "packages.x86_64-linux.build-0-10-9"
-    - "packages.x86_64-linux.build-0-10-8"
-    - "packages.x86_64-linux.build-0-10-7"
-    - "packages.x86_64-linux.build-0-10-6"
-    - "packages.x86_64-linux.build-0-10-5"
-    - "devShells.x86_64-linux.default"
-    # Linux ARM64
     - "packages.aarch64-linux.default"
-    - "packages.aarch64-linux.build-0-10-9"
-    - "packages.aarch64-linux.build-0-10-8"
-    - "packages.aarch64-linux.build-0-10-7"
-    - "packages.aarch64-linux.build-0-10-6"
-    - "packages.aarch64-linux.build-0-10-5"
-    - "devShells.aarch64-linux.default"
-    # macOS ARM64
     - "packages.aarch64-darwin.default"
-    - "packages.aarch64-darwin.build-0-10-9"
-    - "packages.aarch64-darwin.build-0-10-8"
-    - "packages.aarch64-darwin.build-0-10-7"
-    - "packages.aarch64-darwin.build-0-10-6"
-    - "packages.aarch64-darwin.build-0-10-5"
+    # Dev shells
+    - "devShells.x86_64-linux.default"
+    - "devShells.aarch64-linux.default"
     - "devShells.aarch64-darwin.default"
 
-  # Exclude binary packages (we build from source)
+  # Exclude binary packages (pre-built, not built by CI)
   exclude:
     - "packages.*.bin-*"
+    - "packages.*.bin"
+    - "packages.*.latest"
 
-# Only run on main branch pushes, not PRs
-# Garnix runs on PRs by default, so we need to explicitly disable
 pullRequestsEnabled: false

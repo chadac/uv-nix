@@ -10,7 +10,11 @@ UV_VERSION="$(jq -r .version "$PROJECT_DIR/data/uv.json")"
 # Clone uv if missing, or fetch if version doesn't match
 if [ ! -d "$UV_DIR/.git" ]; then
     echo "==> Cloning uv $UV_VERSION..."
-    git clone --depth 1 --branch "$UV_VERSION" https://github.com/astral-sh/uv.git "$UV_DIR"
+    # Init in existing dir (may have cached target/) then fetch
+    git init "$UV_DIR"
+    git -C "$UV_DIR" remote add origin https://github.com/astral-sh/uv.git
+    git -C "$UV_DIR" fetch --depth 1 origin tag "$UV_VERSION"
+    git -C "$UV_DIR" checkout "$UV_VERSION"
 else
     current="$(git -C "$UV_DIR" describe --tags --exact-match 2>/dev/null || echo "")"
     if [ "$current" != "$UV_VERSION" ]; then

@@ -22,7 +22,7 @@ let
   releaseBase = "https://github.com/chadac/uv-nix/releases/download";
 
   binaries = {
-    "0.10.9-nix" = {
+    "0.10.9" = {
       releaseTag = "v0.10.9-nix.1";
       assets = {
         "x86_64-linux" = {
@@ -39,7 +39,7 @@ let
         };
       };
     };
-    "0.10.8-nix" = {
+    "0.10.8" = {
       releaseTag = "v0.10.9-nix.1";
       assets = {
         "x86_64-linux" = {
@@ -56,7 +56,7 @@ let
         };
       };
     };
-    "0.10.7-nix" = {
+    "0.10.7" = {
       releaseTag = "v0.10.9-nix.1";
       assets = {
         "x86_64-linux" = {
@@ -73,7 +73,7 @@ let
         };
       };
     };
-    "0.10.6-nix" = {
+    "0.10.6" = {
       releaseTag = "v0.10.9-nix.1";
       assets = {
         "x86_64-linux" = {
@@ -90,7 +90,7 @@ let
         };
       };
     };
-    "0.10.5-nix" = {
+    "0.10.5" = {
       releaseTag = "v0.10.9-nix.1";
       assets = {
         "x86_64-linux" = {
