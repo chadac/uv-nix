@@ -31,11 +31,20 @@ fn parse_patch_timing(stderr: &str) -> Option<PatchTiming> {
         if let Some(rest) = line.strip_prefix("uv-nix-timing:") {
             found = true;
             for part in rest.split_whitespace() {
-                if let Some(val) = part.strip_prefix("nix_resolve=").and_then(|s| s.strip_suffix("ms")) {
+                if let Some(val) = part
+                    .strip_prefix("nix_resolve=")
+                    .and_then(|s| s.strip_suffix("ms"))
+                {
                     total.nix_resolve_ms += val.parse::<u128>().unwrap_or(0);
-                } else if let Some(val) = part.strip_prefix("find_binaries=").and_then(|s| s.strip_suffix("ms")) {
+                } else if let Some(val) = part
+                    .strip_prefix("find_binaries=")
+                    .and_then(|s| s.strip_suffix("ms"))
+                {
                     total.find_binaries_ms += val.parse::<u128>().unwrap_or(0);
-                } else if let Some(val) = part.strip_prefix("patch=").and_then(|s| s.strip_suffix("ms")) {
+                } else if let Some(val) = part
+                    .strip_prefix("patch=")
+                    .and_then(|s| s.strip_suffix("ms"))
+                {
                     total.patch_ms += val.parse::<u128>().unwrap_or(0);
                 } else if let Some(val) = part.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
                     // "(N files)" — but we split by whitespace so this comes as "(N" and "files)"
@@ -44,10 +53,10 @@ fn parse_patch_timing(stderr: &str) -> Option<PatchTiming> {
                     }
                 }
                 // Handle the "N" from "(N files)" split
-                if part.starts_with('(') {
-                    if let Ok(n) = part.trim_start_matches('(').parse::<usize>() {
-                        total.num_binaries += n;
-                    }
+                if part.starts_with('(')
+                    && let Ok(n) = part.trim_start_matches('(').parse::<usize>()
+                {
+                    total.num_binaries += n;
                 }
             }
         }
@@ -112,8 +121,11 @@ fn bench_package(package: &str, import_check: &str) -> BenchResult {
     let start = Instant::now();
     let install_out = Command::new(UV_BIN.as_path())
         .args([
-            "pip", "install", "-v",
-            "--python", python.to_str().unwrap(),
+            "pip",
+            "install",
+            "-v",
+            "--python",
+            python.to_str().unwrap(),
             package,
         ])
         .env("UV_NIX_TIMING", "1")
@@ -231,7 +243,10 @@ fn format_markdown(results: &[BenchResult]) -> String {
 /// - cryptography: OpenSSL binding
 const BENCH_PACKAGES: &[(&str, &str)] = &[
     ("orjson", "import orjson; print(orjson.dumps({'a': 1}))"),
-    ("cryptography", "from cryptography.hazmat.primitives.ciphers import Cipher; print('ok')"),
+    (
+        "cryptography",
+        "from cryptography.hazmat.primitives.ciphers import Cipher; print('ok')",
+    ),
     ("numpy", "import numpy; print(numpy.__version__)"),
     ("aiohttp", "import aiohttp; print(aiohttp.__version__)"),
     ("pandas", "import pandas; print(pandas.__version__)"),
@@ -252,8 +267,10 @@ fn bench_installs() {
         if warmup_dir.join("bin/python").exists() {
             let _ = Command::new(UV_BIN.as_path())
                 .args([
-                    "pip", "install",
-                    "--python", warmup_dir.join("bin/python").to_str().unwrap(),
+                    "pip",
+                    "install",
+                    "--python",
+                    warmup_dir.join("bin/python").to_str().unwrap(),
                     "pip",
                 ])
                 .output();

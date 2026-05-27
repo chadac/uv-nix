@@ -18,20 +18,30 @@ pub mod patchelf;
 /// Returns the Nix system string for the current platform (e.g., "x86_64-linux", "aarch64-darwin").
 pub fn current_system() -> &'static str {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    { "x86_64-linux" }
+    {
+        "x86_64-linux"
+    }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    { "aarch64-linux" }
+    {
+        "aarch64-linux"
+    }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    { "x86_64-darwin" }
+    {
+        "x86_64-darwin"
+    }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { "aarch64-darwin" }
+    {
+        "aarch64-darwin"
+    }
     #[cfg(not(any(
         all(target_os = "linux", target_arch = "x86_64"),
         all(target_os = "linux", target_arch = "aarch64"),
         all(target_os = "macos", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64"),
     )))]
-    { "unknown" }
+    {
+        "unknown"
+    }
 }
 
 // Re-export CLI types for ergonomic use from uv crate
@@ -66,7 +76,7 @@ pub fn status(verb: &str, message: &str) {
 /// Format: `? {message} [y/n] › {default}`
 /// Returns the default if not running in an interactive terminal.
 pub fn confirm(message: &str, default: bool) -> bool {
-    use console::{style, Key, Term};
+    use console::{Key, Term, style};
     use std::io::IsTerminal;
 
     if !std::io::stderr().is_terminal() {
@@ -141,7 +151,7 @@ pub fn nix_hello(name: Option<String>) -> anyhow::Result<()> {
 
 /// Check if timing instrumentation is enabled via `UV_NIX_TIMING=1`.
 fn timing_enabled() -> bool {
-    std::env::var("UV_NIX_TIMING").map_or(false, |v| v == "1")
+    std::env::var("UV_NIX_TIMING").is_ok_and(|v| v == "1")
 }
 
 /// Called automatically after wheel installs to patch native binaries for Nix compatibility.
@@ -269,7 +279,9 @@ fn collect_native_binaries_from_records(
                 let is_dylib = name.contains(".dylib");
                 let is_so = name.contains(".so");
                 let is_extensionless = !name.contains('.');
-                if (is_dylib || is_so || is_extensionless) && patchelf::is_native_binary(&abs_path, true) {
+                if (is_dylib || is_so || is_extensionless)
+                    && patchelf::is_native_binary(&abs_path, true)
+                {
                     binaries.push(abs_path);
                 }
             } else {
@@ -338,10 +350,10 @@ fn resolve_extra_libraries(start: &Path) -> Option<String> {
 /// then by checking the ELF interpreter of the Python binary.
 fn is_musl_python(python_dir: &Path) -> bool {
     // Fast check: uv's managed Python naming convention includes "musl"
-    if let Some(name) = python_dir.file_name().and_then(|n| n.to_str()) {
-        if name.contains("musl") {
-            return true;
-        }
+    if let Some(name) = python_dir.file_name().and_then(|n| n.to_str())
+        && name.contains("musl")
+    {
+        return true;
     }
 
     // Fallback: check the ELF interpreter of the Python binary
@@ -397,10 +409,7 @@ pub fn post_python_install_patch(python_dir: &Path) {
 
     let config = patchelf::PatchConfig::from_env();
 
-    let python_name = python_dir
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
+    let python_name = python_dir.file_name().unwrap_or_default().to_string_lossy();
     status("Patching", &format!("{python_name} (nix)"));
 
     if let Err(err) = patchelf::patch_directory(python_dir, &config) {

@@ -26,17 +26,16 @@ fn cache_key(nixpkgs_key: &str, attrs: &[String]) -> String {
 
 /// Path to the cache file within a project.
 fn cache_path(project_dir: &Path) -> PathBuf {
-    project_dir.join(".uv-nix").join("cache").join("resolved-libs.json")
+    project_dir
+        .join(".uv-nix")
+        .join("cache")
+        .join("resolved-libs.json")
 }
 
 /// Look up cached resolved library paths.
 ///
 /// Returns `Some(library_path)` if the cache key matches.
-pub fn lookup(
-    project_dir: &Path,
-    nixpkgs_key: &str,
-    attrs: &[String],
-) -> Option<String> {
+pub fn lookup(project_dir: &Path, nixpkgs_key: &str, attrs: &[String]) -> Option<String> {
     let key = cache_key(nixpkgs_key, attrs);
     let path = cache_path(project_dir);
     let content = std::fs::read_to_string(&path).ok()?;

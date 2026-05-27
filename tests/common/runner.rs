@@ -1,3 +1,6 @@
+// Shared test utilities — not all items are used by every test target.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::LazyLock;
@@ -6,10 +9,7 @@ use std::sync::LazyLock;
 pub static UV_BIN: LazyLock<PathBuf> = LazyLock::new(|| {
     std::env::var("UV_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("uv/target/debug/uv")
-        })
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("uv/target/debug/uv"))
 });
 
 /// Shared test directory
@@ -60,10 +60,13 @@ pub fn check_wheel_available(package: &str) -> Option<String> {
     // If no wheel is available, this will fail with "no matching distribution"
     let output = Command::new(UV_BIN.as_path())
         .args([
-            "pip", "install",
+            "pip",
+            "install",
             "--dry-run",
-            "--only-binary", ":all:",
-            "--python", python.to_str().unwrap(),
+            "--only-binary",
+            ":all:",
+            "--python",
+            python.to_str().unwrap(),
             package,
         ])
         .output()
@@ -73,7 +76,11 @@ pub fn check_wheel_available(package: &str) -> Option<String> {
         None // Wheel is available
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Some(format!("No wheel available for {}: {}", package, stderr.lines().next().unwrap_or("unknown error")))
+        Some(format!(
+            "No wheel available for {}: {}",
+            package,
+            stderr.lines().next().unwrap_or("unknown error")
+        ))
     }
 }
 
@@ -92,21 +99,24 @@ pub fn test_package_wheel_only(package: &str, import_check: &str) -> TestResult 
     test_package_impl(package, import_check, false, true)
 }
 
-fn test_package_impl(package: &str, import_check: &str, no_binary: bool, require_wheel: bool) -> TestResult {
+fn test_package_impl(
+    package: &str,
+    import_check: &str,
+    no_binary: bool,
+    require_wheel: bool,
+) -> TestResult {
     let venv = SHARED_VENV.as_path();
     let python = venv.join("bin/python");
 
     // Check wheel availability if required
-    if require_wheel {
-        if let Some(reason) = check_wheel_available(package) {
-            return TestResult {
-                success: true, // Not a failure, just skipped
-                skipped: true,
-                skip_reason: Some(reason),
-                stdout: String::new(),
-                stderr: String::new(),
-            };
-        }
+    if require_wheel && let Some(reason) = check_wheel_available(package) {
+        return TestResult {
+            success: true, // Not a failure, just skipped
+            skipped: true,
+            skip_reason: Some(reason),
+            stdout: String::new(),
+            stderr: String::new(),
+        };
     }
 
     // Build install command (use -v for debug output in CI)

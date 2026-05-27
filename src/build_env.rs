@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 
 use crate::config::PackageConfig;
-use crate::nix_config::{PackageBuildEntry, PACKAGE_BUILD_LIBS_JSON};
+use crate::nix_config::{PACKAGE_BUILD_LIBS_JSON, PackageBuildEntry};
 use crate::nixpkgs;
 
 /// Effective build configuration for a package (merged from defaults + custom config).
@@ -46,12 +46,18 @@ pub fn get_nix_build_env(package_name: Option<&str>) -> HashMap<OsString, OsStri
         // because LD_LIBRARY_PATH on NixOS poisons system tools (bash, gcc) by
         // forcing them to load a different glibc than they were linked against.
         // library_path includes runtime libs + all package lib deps (for linking).
-        prepend_env(&mut env_vars, "LIBRARY_PATH", &OsString::from(&nix.library_path));
+        prepend_env(
+            &mut env_vars,
+            "LIBRARY_PATH",
+            &OsString::from(&nix.library_path),
+        );
 
         // Base PATH: stdenv.cc + coreutils + pkg-config's directory
         // pkg-config must be on PATH because many build scripts call it directly
         // (the PKG_CONFIG env var is only used by CMake/autotools, not shell scripts).
-        let pkg_config_dir = nix.pkg_config.parent()
+        let pkg_config_dir = nix
+            .pkg_config
+            .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
         let base_path = format!("{}:{}:{}", nix.cc_bin, nix.coreutils_bin, pkg_config_dir);
@@ -64,24 +70,48 @@ pub fn get_nix_build_env(package_name: Option<&str>) -> HashMap<OsString, OsStri
     }
 
     // Resolve per-package deps from package-build-libs.json + custom config
-    if let Some(name) = package_name {
-        if let Some(resolved) = resolve_package_build_env(name) {
-            if !resolved.library_path.is_empty() {
-                prepend_env(&mut env_vars, "LIBRARY_PATH", &OsString::from(&resolved.library_path));
-                prepend_env(&mut env_vars, "C_INCLUDE_PATH", &OsString::from(&resolved.include_path));
-                prepend_env(&mut env_vars, "PKG_CONFIG_PATH", &OsString::from(&resolved.pkg_config_path));
-            }
-            if !resolved.bin_path.is_empty() {
-                prepend_env(&mut env_vars, "PATH", &OsString::from(&resolved.bin_path));
-            }
+    if let Some(name) = package_name
+        && let Some(resolved) = resolve_package_build_env(name)
+    {
+        if !resolved.library_path.is_empty() {
+            prepend_env(
+                &mut env_vars,
+                "LIBRARY_PATH",
+                &OsString::from(&resolved.library_path),
+            );
+            prepend_env(
+                &mut env_vars,
+                "C_INCLUDE_PATH",
+                &OsString::from(&resolved.include_path),
+            );
+            prepend_env(
+                &mut env_vars,
+                "PKG_CONFIG_PATH",
+                &OsString::from(&resolved.pkg_config_path),
+            );
+        }
+        if !resolved.bin_path.is_empty() {
+            prepend_env(&mut env_vars, "PATH", &OsString::from(&resolved.bin_path));
         }
     }
 
     // Resolve per-project extra-libraries from [tool.uv-nix] in pyproject.toml
     if let Some(extra) = resolve_extra_build_paths() {
-        prepend_env(&mut env_vars, "LIBRARY_PATH", &OsString::from(&extra.library_path));
-        prepend_env(&mut env_vars, "C_INCLUDE_PATH", &OsString::from(&extra.include_path));
-        prepend_env(&mut env_vars, "PKG_CONFIG_PATH", &OsString::from(&extra.pkg_config_path));
+        prepend_env(
+            &mut env_vars,
+            "LIBRARY_PATH",
+            &OsString::from(&extra.library_path),
+        );
+        prepend_env(
+            &mut env_vars,
+            "C_INCLUDE_PATH",
+            &OsString::from(&extra.include_path),
+        );
+        prepend_env(
+            &mut env_vars,
+            "PKG_CONFIG_PATH",
+            &OsString::from(&extra.pkg_config_path),
+        );
         if !extra.bin_path.is_empty() {
             prepend_env(&mut env_vars, "PATH", &OsString::from(&extra.bin_path));
         }
@@ -110,7 +140,9 @@ pub fn get_effective_package_config(package_name: &str) -> EffectivePackageConfi
 
     // Determine nixpkgs source
     let source = if let Some(ref custom_nixpkgs) = custom_config.and_then(|c| c.nixpkgs.as_ref()) {
-        nixpkgs::NixpkgsSource::ExplicitPin { flake_ref: custom_nixpkgs.to_string() }
+        nixpkgs::NixpkgsSource::ExplicitPin {
+            flake_ref: custom_nixpkgs.to_string(),
+        }
     } else {
         nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config)
     };
@@ -127,10 +159,7 @@ pub fn get_effective_package_config(package_name: &str) -> EffectivePackageConfi
 /// Prepend `value` to the existing value of `key` (colon-separated).
 fn prepend_env(env_vars: &mut HashMap<OsString, OsString>, key: &str, value: &OsString) {
     let key = OsString::from(key);
-    let existing = env_vars
-        .get(&key)
-        .cloned()
-        .or_else(|| env::var_os(&key));
+    let existing = env_vars.get(&key).cloned().or_else(|| env::var_os(&key));
 
     let new_value = match existing {
         Some(existing) if !existing.is_empty() => {
@@ -227,10 +256,7 @@ fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
     let (libs, build_tools) = build_effective_entry(package_name, custom_config);
 
     // Collect all attrs to resolve
-    let all_attrs: Vec<String> = libs.iter()
-        .chain(build_tools.iter())
-        .cloned()
-        .collect();
+    let all_attrs: Vec<String> = libs.iter().chain(build_tools.iter()).cloned().collect();
 
     if all_attrs.is_empty() {
         return None;
@@ -238,7 +264,9 @@ fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
 
     // Determine nixpkgs source (per-package override or project default)
     let source = if let Some(ref custom_nixpkgs) = custom_config.and_then(|c| c.nixpkgs.as_ref()) {
-        nixpkgs::NixpkgsSource::ExplicitPin { flake_ref: custom_nixpkgs.to_string() }
+        nixpkgs::NixpkgsSource::ExplicitPin {
+            flake_ref: custom_nixpkgs.to_string(),
+        }
     } else {
         nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config)
     };
@@ -265,8 +293,10 @@ fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
 
     // Cache miss — resolve via nix-build
     crate::status("Resolving", &format!("build deps for {package_name}"));
-    debug!("Resolving package build env for {package_name}: libs={:?}, build-tools={:?}",
-           libs, build_tools);
+    debug!(
+        "Resolving package build env for {package_name}: libs={:?}, build-tools={:?}",
+        libs, build_tools
+    );
 
     match nixpkgs::resolve_build_paths(&all_attrs, &source) {
         Ok(resolved) => {
@@ -338,10 +368,7 @@ fn resolve_extra_build_paths() -> Option<nixpkgs::ResolvedBuildPaths> {
         return None;
     }
 
-    debug!(
-        "Found {} extra libraries for build env",
-        libs.len()
-    );
+    debug!("Found {} extra libraries for build env", libs.len());
 
     let source = nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config);
     let nix_key = nixpkgs::nixpkgs_cache_key(&source);
@@ -361,15 +388,10 @@ fn resolve_extra_build_paths() -> Option<nixpkgs::ResolvedBuildPaths> {
         Ok(paths) => {
             debug!("Resolved build paths: {:?}", paths);
             // Cache as JSON
-            if let Ok(json) = serde_json::to_string(&paths) {
-                if let Err(err) = crate::cache::store(
-                    &project_dir,
-                    &cache_key,
-                    &libs,
-                    &json,
-                ) {
-                    warn!("Failed to cache resolved build paths: {err}");
-                }
+            if let Ok(json) = serde_json::to_string(&paths)
+                && let Err(err) = crate::cache::store(&project_dir, &cache_key, &libs, &json)
+            {
+                warn!("Failed to cache resolved build paths: {err}");
             }
             Some(paths)
         }
@@ -388,7 +410,11 @@ mod tests {
     #[test]
     fn test_prepend_env_empty() {
         let mut env_vars = HashMap::new();
-        prepend_env(&mut env_vars, "TEST_VAR", &OsString::from("/nix/store/foo/lib"));
+        prepend_env(
+            &mut env_vars,
+            "TEST_VAR",
+            &OsString::from("/nix/store/foo/lib"),
+        );
         assert_eq!(
             env_vars.get(&OsString::from("TEST_VAR")),
             Some(&OsString::from("/nix/store/foo/lib"))
@@ -399,7 +425,11 @@ mod tests {
     fn test_prepend_env_existing() {
         let mut env_vars = HashMap::new();
         env_vars.insert(OsString::from("TEST_VAR"), OsString::from("/existing/path"));
-        prepend_env(&mut env_vars, "TEST_VAR", &OsString::from("/nix/store/foo/lib"));
+        prepend_env(
+            &mut env_vars,
+            "TEST_VAR",
+            &OsString::from("/nix/store/foo/lib"),
+        );
         assert_eq!(
             env_vars.get(&OsString::from("TEST_VAR")),
             Some(&OsString::from("/nix/store/foo/lib:/existing/path"))
@@ -414,7 +444,11 @@ mod tests {
         // psycopg2 has both libs and build-tools
         let psycopg2 = package_map.get("psycopg2").unwrap();
         assert!(psycopg2.libs.contains(&"libpq".to_string()));
-        assert!(psycopg2.build_tools.contains(&"libpq.pg_config".to_string()));
+        assert!(
+            psycopg2
+                .build_tools
+                .contains(&"libpq.pg_config".to_string())
+        );
 
         // bcrypt has libs + build-tools (cargo)
         let bcrypt = package_map.get("bcrypt").unwrap();

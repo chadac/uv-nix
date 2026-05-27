@@ -16,6 +16,13 @@
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = import systems;
 
+      flake.overlays.default = final: prev: {
+        uv-nix = final.callPackage ./. { craneLib = crane.mkLib final; };
+        uv-nix-bin =
+          let binaries = import ./nix/uv-nix-binaries.nix { pkgs = final; };
+          in binaries.latest or null;
+      };
+
       perSystem = { pkgs, system, lib, ... }:
         let
           package = pkgs.callPackage ./. { craneLib = crane.mkLib pkgs; };

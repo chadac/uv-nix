@@ -15,7 +15,7 @@ use owo_colors::OwoColorize;
 use serde::Serialize;
 use tracing::{debug, warn};
 
-use crate::build_env::{get_effective_package_config, EffectivePackageConfig};
+use crate::build_env::{EffectivePackageConfig, get_effective_package_config};
 use crate::patchelf::{self, PatchConfig};
 
 /// Output streams for CLI commands, matching uv's Printer pattern.
@@ -183,11 +183,7 @@ pub fn nix_patch<O: Write, E: Write>(
 
     // Patch Python interpreter
     if !opts.only_packages {
-        let _ = writeln!(
-            out.stderr,
-            "{}",
-            "Patching Python interpreter...".dimmed()
-        );
+        let _ = writeln!(out.stderr, "{}", "Patching Python interpreter...".dimmed());
         match patchelf::patch_binary(&python_path, &config) {
             Ok(()) => {
                 patched_count += 1;
@@ -239,13 +235,16 @@ pub fn nix_patch<O: Write, E: Write>(
         }
 
         let s = if patched_count == 1 { "y" } else { "ies" };
-        let pkg_s = if packages_to_patch.len() == 1 { "" } else { "s" };
+        let pkg_s = if packages_to_patch.len() == 1 {
+            ""
+        } else {
+            "s"
+        };
         let _ = writeln!(
             out.stderr,
-            "{} {} {} {}",
+            "{} {} in {}",
             "Patched".green().bold(),
             format!("{patched_count} binar{s}").bold(),
-            "in",
             format!("{} package{pkg_s}", packages_to_patch.len()).bold()
         );
     }
@@ -308,12 +307,7 @@ fn nix_info_package<O: Write, E: Write>(
 
 /// Print package build configuration in text format.
 fn print_package_config_text<W: Write>(out: &mut W, config: &EffectivePackageConfig) {
-    let _ = writeln!(
-        out,
-        "{} {}",
-        "Package:".bold(),
-        config.name.cyan()
-    );
+    let _ = writeln!(out, "{} {}", "Package:".bold(), config.name.cyan());
     let _ = writeln!(out);
 
     // Custom config indicator
@@ -528,7 +522,7 @@ fn collect_venv_info(venv: &Path, verbose: bool) -> anyhow::Result<VenvNixInfo> 
 
 /// Resolve the nixpkgs source for display in `uv nix info`.
 fn resolve_nixpkgs_info(start: &Path) -> Option<NixpkgsInfo> {
-    use crate::{config, nixpkgs, nix_config};
+    use crate::{config, nix_config, nixpkgs};
 
     // Walk up from start to find the project root (not the venv directory)
     let project_dir = nix_config::find_project_root(start)
@@ -542,15 +536,12 @@ fn resolve_nixpkgs_info(start: &Path) -> Option<NixpkgsInfo> {
     let source = nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config);
 
     let (source_desc, value) = match &source {
-        nixpkgs::NixpkgsSource::ExplicitPin { flake_ref } => {
-            ("pyproject.toml [tool.uv-nix].nixpkgs".to_string(), flake_ref.clone())
-        }
-        nixpkgs::NixpkgsSource::FlakeLock { rev } => {
-            ("flake.lock".to_string(), rev.clone())
-        }
-        nixpkgs::NixpkgsSource::DevenvLock { rev } => {
-            ("devenv.lock".to_string(), rev.clone())
-        }
+        nixpkgs::NixpkgsSource::ExplicitPin { flake_ref } => (
+            "pyproject.toml [tool.uv-nix].nixpkgs".to_string(),
+            flake_ref.clone(),
+        ),
+        nixpkgs::NixpkgsSource::FlakeLock { rev } => ("flake.lock".to_string(), rev.clone()),
+        nixpkgs::NixpkgsSource::DevenvLock { rev } => ("devenv.lock".to_string(), rev.clone()),
         nixpkgs::NixpkgsSource::FloxLock { rev } => {
             (".flox/env/manifest.lock".to_string(), rev.clone())
         }
