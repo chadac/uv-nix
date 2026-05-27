@@ -58,17 +58,6 @@ pub struct InfoOptions {
     pub package: Option<String>,
 }
 
-/// Options for the `uv nix rebuild` command.
-#[derive(Debug, Clone)]
-pub struct RebuildOptions {
-    /// Path to the virtual environment.
-    pub path: PathBuf,
-    /// Specific packages to rebuild (None = all).
-    pub packages: Option<Vec<String>>,
-    /// Force rebuild even if up-to-date.
-    pub force: bool,
-}
-
 /// Information about a patched package.
 #[derive(Debug, Clone, Serialize)]
 pub struct PatchedPackageInfo {
@@ -86,13 +75,80 @@ pub struct PatchedPackageInfo {
     pub rpath_entries: Vec<String>,
 }
 
+/// Information about the resolved nixpkgs source.
+#[derive(Debug, Clone, Serialize)]
+pub struct NixpkgsInfo {
+    /// Human-readable description of the source type.
+    pub source: String,
+    /// The nixpkgs revision or flake ref.
+    pub value: String,
+}
+
+/// Write nixpkgs metadata to pyvenv.cfg in the venv.
+///
+/// Appends `uv-nix-nixpkgs-source` and `uv-nix-nixpkgs-rev` keys,
+/// updating existing entries if present.
+fn save_venv_nixpkgs(venv: &Path, info: &NixpkgsInfo) {
+    let cfg_path = venv.join("pyvenv.cfg");
+    let content = match std::fs::read_to_string(&cfg_path) {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::debug!("Failed to read pyvenv.cfg: {err}");
+            return;
+        }
+    };
+
+    // Remove existing uv-nix lines, then append new ones
+    let mut lines: Vec<&str> = content
+        .lines()
+        .filter(|l| !l.starts_with("uv-nix-nixpkgs-source") && !l.starts_with("uv-nix-nixpkgs-rev"))
+        .collect();
+
+    // Remove trailing empty lines for clean append
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+
+    let mut output = lines.join("\n");
+    output.push_str(&format!("\nuv-nix-nixpkgs-source = {}", info.source));
+    output.push_str(&format!("\nuv-nix-nixpkgs-rev = {}", info.value));
+    output.push('\n');
+
+    if let Err(err) = std::fs::write(&cfg_path, output) {
+        tracing::debug!("Failed to write pyvenv.cfg: {err}");
+    }
+}
+
+/// Read nixpkgs metadata from pyvenv.cfg if available.
+fn load_venv_nixpkgs(venv: &Path) -> Option<NixpkgsInfo> {
+    let cfg_path = venv.join("pyvenv.cfg");
+    let content = std::fs::read_to_string(cfg_path).ok()?;
+
+    let mut source = None;
+    let mut value = None;
+    for line in content.lines() {
+        if let Some(v) = line.strip_prefix("uv-nix-nixpkgs-source = ") {
+            source = Some(v.to_string());
+        } else if let Some(v) = line.strip_prefix("uv-nix-nixpkgs-rev = ") {
+            value = Some(v.to_string());
+        }
+    }
+
+    Some(NixpkgsInfo {
+        source: source?,
+        value: value?,
+    })
+}
+
 /// Information about the virtual environment's Nix patches.
 #[derive(Debug, Clone, Serialize)]
 pub struct VenvNixInfo {
     /// Path to the virtual environment.
     pub venv_path: PathBuf,
+    /// Resolved nixpkgs source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nixpkgs: Option<NixpkgsInfo>,
     /// Whether the Python interpreter is patched.
-    pub python_patched: bool,
     /// Python interpreter path.
     pub python_path: PathBuf,
     /// RPATH entries on Python interpreter.
@@ -192,6 +248,11 @@ pub fn nix_patch<O: Write, E: Write>(
             "in",
             format!("{} package{pkg_s}", packages_to_patch.len()).bold()
         );
+    }
+
+    // Save resolved nixpkgs info to venv for later retrieval
+    if let Some(info) = resolve_nixpkgs_info(&venv_path) {
+        save_venv_nixpkgs(&venv_path, &info);
     }
 
     Ok(())
@@ -300,78 +361,6 @@ fn print_package_config_text<W: Write>(out: &mut W, config: &EffectivePackageCon
     }
 }
 
-/// Handler for `uv nix rebuild`.
-pub fn nix_rebuild<O: Write, E: Write>(
-    out: &mut CliOutput<'_, O, E>,
-    opts: RebuildOptions,
-) -> anyhow::Result<()> {
-    let venv_path = opts.path.canonicalize().unwrap_or(opts.path.clone());
-
-    if !venv_path.exists() {
-        anyhow::bail!("Virtual environment not found: {}", venv_path.display());
-    }
-
-    // Get fresh config (re-resolves nixpkgs, etc.)
-    let config = PatchConfig::from_env();
-    let site_packages = find_site_packages(&venv_path)?;
-
-    let packages_to_rebuild = if let Some(ref pkg_names) = opts.packages {
-        find_packages_by_name(&site_packages, pkg_names)
-    } else {
-        find_all_native_packages(&site_packages, config.is_darwin)
-    };
-
-    if packages_to_rebuild.is_empty() {
-        let _ = writeln!(
-            out.stderr,
-            "{}",
-            "No packages with native binaries found".dimmed()
-        );
-        return Ok(());
-    }
-
-    let pkg_s = if packages_to_rebuild.len() == 1 {
-        ""
-    } else {
-        "s"
-    };
-    let _ = writeln!(
-        out.stderr,
-        "{}",
-        format!(
-            "Rebuilding {} package{pkg_s}...",
-            packages_to_rebuild.len()
-        )
-        .dimmed()
-    );
-
-    let mut rebuilt_count = 0;
-    for (pkg_name, pkg_path) in &packages_to_rebuild {
-        let _ = writeln!(
-            out.stderr,
-            "{}",
-            format!("Rebuilding {pkg_name}...").dimmed()
-        );
-        let binaries = patchelf::find_native_binaries(pkg_path, config.is_darwin);
-        for bin in &binaries {
-            if let Err(e) = patchelf::patch_binary(bin, &config) {
-                warn!("Failed to patch {}: {}", bin.display(), e);
-            } else {
-                rebuilt_count += 1;
-            }
-        }
-    }
-
-    let s = if rebuilt_count == 1 { "y" } else { "ies" };
-    let _ = writeln!(
-        out.stderr,
-        "{} {}",
-        "Rebuilt".green().bold(),
-        format!("{rebuilt_count} binar{s}").bold()
-    );
-    Ok(())
-}
-
 // =============================================================================
 // Helper functions
 // =============================================================================
@@ -476,9 +465,10 @@ fn collect_venv_info(venv: &Path, verbose: bool) -> anyhow::Result<VenvNixInfo> 
 
     let config = PatchConfig::from_env();
 
-    // Check if Python is patched (has Nix store paths in RPATH)
+    // Read nixpkgs info from pyvenv.cfg (written during patch/rebuild)
+    let nixpkgs = load_venv_nixpkgs(venv);
+
     let python_rpath = get_rpath(&python_path, &config);
-    let python_patched = python_rpath.iter().any(|p| p.contains("/nix/store"));
 
     // Collect package info
     let mut packages = Vec::new();
@@ -528,11 +518,50 @@ fn collect_venv_info(venv: &Path, verbose: bool) -> anyhow::Result<VenvNixInfo> 
 
     Ok(VenvNixInfo {
         venv_path: venv.to_path_buf(),
-        python_patched,
+        nixpkgs,
         python_path,
         python_rpath,
         packages,
         total_binaries,
+    })
+}
+
+/// Resolve the nixpkgs source for display in `uv nix info`.
+fn resolve_nixpkgs_info(start: &Path) -> Option<NixpkgsInfo> {
+    use crate::{config, nixpkgs, nix_config};
+
+    // Walk up from start to find the project root (not the venv directory)
+    let project_dir = nix_config::find_project_root(start)
+        .or_else(|| nix_config::find_project_root(&std::env::current_dir().ok()?))
+        .unwrap_or_else(|| start.to_path_buf());
+
+    let uv_nix_config = config::find_config(&project_dir)
+        .map(|(c, _)| c)
+        .unwrap_or_default();
+
+    let source = nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config);
+
+    let (source_desc, value) = match &source {
+        nixpkgs::NixpkgsSource::ExplicitPin { flake_ref } => {
+            ("pyproject.toml [tool.uv-nix].nixpkgs".to_string(), flake_ref.clone())
+        }
+        nixpkgs::NixpkgsSource::FlakeLock { rev } => {
+            ("flake.lock".to_string(), rev.clone())
+        }
+        nixpkgs::NixpkgsSource::DevenvLock { rev } => {
+            ("devenv.lock".to_string(), rev.clone())
+        }
+        nixpkgs::NixpkgsSource::FloxLock { rev } => {
+            (".flox/env/manifest.lock".to_string(), rev.clone())
+        }
+        nixpkgs::NixpkgsSource::AutoResolved { rev } => {
+            ("auto-resolved (nixpkgs-unstable)".to_string(), rev.clone())
+        }
+    };
+
+    Some(NixpkgsInfo {
+        source: source_desc,
+        value,
     })
 }
 
@@ -593,60 +622,68 @@ fn print_info_text<W: Write>(out: &mut W, info: &VenvNixInfo, verbose: bool) {
     );
     let _ = writeln!(out);
 
-    let _ = writeln!(out, "{}", "Python interpreter:".bold());
-    let _ = writeln!(
-        out,
-        "  Path: {}",
-        info.python_path.display().to_string().cyan()
-    );
-    let patched_str = if info.python_patched {
-        "yes".green().to_string()
-    } else {
-        "no".yellow().to_string()
-    };
-    let _ = writeln!(out, "  Patched: {}", patched_str);
-    if verbose && !info.python_rpath.is_empty() {
-        let _ = writeln!(out, "  RPATH:");
-        for entry in &info.python_rpath {
-            let _ = writeln!(out, "    {}", entry.dimmed());
+    if let Some(ref nixpkgs) = info.nixpkgs {
+        // Patched environment — show full details
+        let _ = writeln!(out, "{}", "Nixpkgs:".bold());
+        let _ = writeln!(out, "  Source: {}", nixpkgs.source.cyan());
+        let _ = writeln!(out, "  Rev:    {}", nixpkgs.value.dimmed());
+        let _ = writeln!(out);
+
+        let _ = writeln!(out, "{}", "Python interpreter:".bold());
+        let _ = writeln!(
+            out,
+            "  Path: {}",
+            info.python_path.display().to_string().cyan()
+        );
+        if verbose && !info.python_rpath.is_empty() {
+            let _ = writeln!(out, "  RPATH:");
+            for entry in &info.python_rpath {
+                let _ = writeln!(out, "    {}", entry.dimmed());
+            }
         }
-    }
-    let _ = writeln!(out);
+        let _ = writeln!(out);
 
-    let _ = writeln!(
-        out,
-        "{} {}",
-        "Packages with native binaries:".bold(),
-        info.packages.len()
-    );
-    let _ = writeln!(
-        out,
-        "{} {}",
-        "Total native binaries:".bold(),
-        info.total_binaries
-    );
-    let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "{} {}",
+            "Packages with native binaries:".bold(),
+            info.packages.len()
+        );
+        let _ = writeln!(
+            out,
+            "{} {}",
+            "Total native binaries:".bold(),
+            info.total_binaries
+        );
+        let _ = writeln!(out);
 
-    if !info.packages.is_empty() {
-        let _ = writeln!(out, "{}", "Packages:".bold());
-        for pkg in &info.packages {
-            let _ = writeln!(
-                out,
-                "  {} {}",
-                pkg.name.cyan(),
-                format!("({} binaries)", pkg.binary_count).dimmed()
-            );
-            if verbose {
-                for bin in &pkg.binaries {
-                    let _ = writeln!(out, "    {}", bin.dimmed());
-                }
-                if !pkg.rpath_entries.is_empty() {
-                    let _ = writeln!(out, "    {}:", "RPATH".dimmed());
-                    for entry in &pkg.rpath_entries {
-                        let _ = writeln!(out, "      {}", entry.dimmed());
+        if !info.packages.is_empty() {
+            let _ = writeln!(out, "{}", "Packages:".bold());
+            for pkg in &info.packages {
+                let _ = writeln!(
+                    out,
+                    "  {} {}",
+                    pkg.name.cyan(),
+                    format!("({} binaries)", pkg.binary_count).dimmed()
+                );
+                if verbose {
+                    for bin in &pkg.binaries {
+                        let _ = writeln!(out, "    {}", bin.dimmed());
+                    }
+                    if !pkg.rpath_entries.is_empty() {
+                        let _ = writeln!(out, "    {}:", "RPATH".dimmed());
+                        for entry in &pkg.rpath_entries {
+                            let _ = writeln!(out, "      {}", entry.dimmed());
+                        }
                     }
                 }
             }
         }
+    } else {
+        let _ = writeln!(
+            out,
+            "{}",
+            "Not patched yet. Run `uv nix patch` to patch this environment.".yellow()
+        );
     }
 }

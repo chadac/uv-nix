@@ -16,8 +16,9 @@ if [ ! -f "$UV_DIR/Cargo.toml" ]; then
 fi
 
 echo "==> Updating Cargo.lock..."
-cargo generate-lockfile --manifest-path "$UV_DIR/Cargo.toml" 2>/dev/null \
-    || cargo update --manifest-path "$UV_DIR/Cargo.toml" -w
+# Use `cargo update -w` to only resolve workspace-local crates (uv-nix)
+# without upgrading external dependency versions.
+cargo update --manifest-path "$UV_DIR/Cargo.toml" -w
 
 echo "==> Copying Cargo.lock to data/Cargo.lock..."
 cp "$UV_DIR/Cargo.lock" "$PROJECT_DIR/data/Cargo.lock"

@@ -50,13 +50,13 @@ index a60ee0d81..678d44377 100644
 -    CacheNamespace, Cli, Commands, PipCommand, PipNamespace, ProjectCommand, PythonCommand,
 -    PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace, TopLevelArgs,
 -    WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
-+    CacheNamespace, Cli, Commands, NixCommand, NixNamespace, PipCommand, PipNamespace,
-+    ProjectCommand, PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand,
-+    ToolNamespace, TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
++    CacheNamespace, Cli, Commands, NixCommand, NixNamespace, PipCommand, PipNamespace, ProjectCommand,
++    PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace,
++    TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
  };
  use uv_client::BaseClientBuilder;
  use uv_configuration::min_stack_size;
-@@ -1281,6 +1281,53 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
+@@ -1281,6 +1281,39 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
              ))
              .await
          }
@@ -90,20 +90,6 @@ index a60ee0d81..678d44377 100644
 +                verbose: args.show_details,
 +                json: args.json,
 +                package: args.package,
-+            })?;
-+            Ok(ExitStatus::Success)
-+        }
-+        Commands::Nix(NixNamespace {
-+            command: NixCommand::Rebuild(args),
-+        }) => {
-+            let mut out = uv_nix::CliOutput {
-+                stdout: &mut printer.stdout(),
-+                stderr: &mut printer.stderr(),
-+            };
-+            uv_nix::nix_rebuild(&mut out, uv_nix::RebuildOptions {
-+                path: args.path,
-+                packages: args.packages,
-+                force: args.force,
 +            })?;
 +            Ok(ExitStatus::Success)
 +        }

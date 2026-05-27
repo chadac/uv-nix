@@ -35,8 +35,8 @@ pub fn current_system() -> &'static str {
 }
 
 // Re-export CLI types for ergonomic use from uv crate
-pub use cli::{CliOutput, InfoOptions, PatchOptions, RebuildOptions};
-pub use cli::{nix_info, nix_patch, nix_rebuild};
+pub use cli::{CliOutput, InfoOptions, PatchOptions};
+pub use cli::{nix_info, nix_patch};
 
 /// Create a `nix` command with the required experimental features enabled.
 ///
@@ -59,6 +59,62 @@ pub fn status(verb: &str, message: &str) {
     } else {
         eprintln!("{verb:>12} {message}");
     }
+}
+
+/// Prompt the user for confirmation, matching uv's style.
+///
+/// Format: `? {message} [y/n] › {default}`
+/// Returns the default if not running in an interactive terminal.
+pub fn confirm(message: &str, default: bool) -> bool {
+    use console::{style, Key, Term};
+    use std::io::IsTerminal;
+
+    if !std::io::stderr().is_terminal() {
+        return default;
+    }
+
+    let term = Term::stderr();
+    let prompt = format!(
+        "{} {} {} {} {}",
+        style("?").yellow(),
+        style(message).bold(),
+        style("[y/n]").black().bright(),
+        style("›").black().bright(),
+        style(if default { "yes" } else { "no" }).cyan(),
+    );
+
+    let _ = term.write_str(&prompt);
+    let _ = term.hide_cursor();
+    let _ = term.flush();
+
+    let response = loop {
+        match term.read_key() {
+            Ok(Key::Char('y' | 'Y')) => break true,
+            Ok(Key::Char('n' | 'N')) => break false,
+            Ok(Key::Enter) => break default,
+            Ok(Key::CtrlC) => {
+                let _ = term.show_cursor();
+                let _ = term.write_str("\n");
+                let _ = term.flush();
+                std::process::exit(130);
+            }
+            _ => {}
+        }
+    };
+
+    let report = format!(
+        "{} {} {} {}",
+        style("✔").green(),
+        style(message).bold(),
+        style("·").black().bright(),
+        style(if response { "yes" } else { "no" }).cyan(),
+    );
+    let _ = term.clear_line();
+    let _ = term.write_line(&report);
+    let _ = term.show_cursor();
+    let _ = term.flush();
+
+    response
 }
 
 /// Print a warning message to stderr matching uv's output style.
