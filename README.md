@@ -3,29 +3,29 @@
 Patch for uv for hassle-free venv management using Nix.
 
 Using `uv` with Nix dev envs (or just Python in general) can be a
-hassle when using libraries that depend on system packages. Nix can
-solve this, but tools like
-[uv2nix](https://github.com/pyproject-nix/uv2nix) replace `uv` rather
-than layering on top -- which means you lose some of the speed
-advantages.
+annoying when using libraries that depend on system packages. Nix can
+solve this, but you're generally stuck with one of two options:
 
-This project patches `uv` to Nix-aware by:
+1. Have Nix import system libraries and patch
+   `LD_LIBRARY_PATH`/`pkg-config`/`DYLD_LIBRARY_PATH` manually (and
+   deal with [macOS SIP
+   issues](https://briandfoy.github.io/macos-s-system-integrity-protection-sanitizes-your-environment/))
+2. Build the entire venv with `uv2nix`, which tends to be a bit slower
+   and more verbose.
 
+This project provides a "best of both worlds approach" by:
+
+* Patching Python wheels with patchelf to link directly to Nix-supplied
+  libraries. No need for `LD_LIBRARY_PATH` hacks.
+  * This also works for source builds
 * Patching the Python binaries that `uv` provides:
   * Libraries like `zlib` and such use Nix-provided versions
   * It also hooks up the `ctypes` module with uv-nix so `find_library`
     and such work
-* Patching Python wheels with patchelf to link directly to Nix-supplied
-  libraries. No need for `LD_LIBRARY_PATH` hacks.
-* It also updates source builds to use Nix libraries (TODO is to make
-  source/wheel builds pure derivations if desired as well)
 
 These all are sourced preferentially from your
-`flake.nix`/devenv/flox/devbox configurations as well if you have
+`flake.nix`/devenv/flox configurations as well if you have
 them.
-
-*WARNING: USE AT YOUR OWN RISK!* Since this is patching `uv`, it means
-that it could at any time break.
 
 ## Installation
 
@@ -35,20 +35,12 @@ This can be installed like any other Nix package.
 nix profile install github:chadac/uv-nix
 ```
 
-WARNING: The default installer is just a repackaged binary! If you
-want to do a proper source build, use:
+There are faster (and uv-version-pinned) binaries available from the
+flake as well:
 
 ```bash
-nix profile install github:chadac/uv-nix#build
-```
-
-### One-time use
-
-If you don't want to use uv-nix exclusively but just want to patch an
-existing venv/one-time sync a venv, use:
-
-```bash
-nix run github:chadac/uv-nix -- patch
+nix profile install github:chadac/uv-nix#bin
+nix profile install github:chadac/uv-nix#bin-0.11.6
 ```
 
 ## Usage
@@ -59,10 +51,10 @@ integrate with your flake and uv project without any interference.
 If you are importing this into an existing project, you can run:
 
 ```bash
-uv nix rebuild
+uv nix patch
 ```
 
-To recreate all the venv with all your Nix-patched artifacts.
+To recreate your venv with the patched Python binary and versions.
 
 ## Configuration
 
@@ -117,19 +109,65 @@ Common examples:
 | `libpq` | PostgreSQL support (psycopg2) |
 | `openssl` | SSL/TLS support |
 | `zlib` | Compression support |
-#### `nixpkgs`
 
-By default, uv-nix auto-detects your nixpkgs from:
-1. Your `flake.nix` inputs
-2. Your `devenv.yaml` inputs
-3. Falls back to `github:NixOS/nixpkgs/nixpkgs-unstable`
+#### Nixpkgs resolution
 
-You can override this with an explicit flake reference:
+uv-nix needs a nixpkgs revision to resolve library paths. By default,
+it auto-detects from your project's lock files in this order:
+
+1. `flake.lock` — looks for `NixOS/nixpkgs` in the flake inputs
+2. `devenv.lock` — same format as flake.lock
+3. `.flox/env/manifest.lock` — Flox manifest lock
+
+If none of these are found, uv-nix generates a minimal `flake.nix`
+and `flake.lock` in your project to pin `nixpkgs-unstable`. This
+ensures reproducible builds — you can update the pin later with
+`nix flake update`.
+
+You can check which nixpkgs source is being used with `uv nix info`.
+
+##### `use`
+
+If you want to skip auto-detection and use a specific source:
+
+```toml
+[tool.uv-nix]
+use = "flake.lock"    # or "devenv" or "flox"
+```
+
+##### Custom lock file paths
+
+If your lock file is in a non-standard location:
+
+```toml
+[tool.uv-nix]
+use = "flake.lock"
+
+[tool.uv-nix.flake]
+lock = "subdir/flake.lock"
+```
+
+This also works for devenv and flox:
+
+```toml
+[tool.uv-nix.devenv]
+lock = "path/to/devenv.lock"
+
+[tool.uv-nix.flox]
+lock = "custom/.flox/env/manifest.lock"
+```
+
+##### `nixpkgs`
+
+To bypass lock file detection entirely and pin to a specific nixpkgs
+revision:
 
 ```toml
 [tool.uv-nix]
 nixpkgs = "github:NixOS/nixpkgs/a3c0b3b21515f74fd2665903d4ce6f4d83838dde"
 ```
+
+This takes highest priority — if set, lock file detection is skipped.
 
 ### Per-package configuration
 
@@ -145,6 +183,7 @@ libraries = ["postgresql_17"]
 extra-build-tools = ["gcc"]
 # Pin to a specific nixpkgs commit for this package
 nixpkgs = "github:NixOS/nixpkgs/a3c0b3b21515f74fd2665903d4ce6f4d83838dde"
+
 [[tool.uv-nix.package]]
 name = "pillow"
 # Add libraries on top of defaults (from package-build-libs.json)
@@ -228,12 +267,3 @@ uv nix patch --only-packages   # Only patch installed packages
 uv nix patch --packages numpy  # Only patch specific packages
 ```
 
-### `uv nix rebuild [path]`
-
-Re-patch all native binaries (useful after config changes).
-
-```bash
-uv nix rebuild                 # Rebuild .venv
-uv nix rebuild --force         # Force rebuild even if up-to-date
-uv nix rebuild --packages pkg  # Only rebuild specific packages
-```
