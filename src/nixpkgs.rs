@@ -4,43 +4,48 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::config::UvNixConfig;
+use crate::config::{UvNixConfig, UseSource};
 
 /// Describes how nixpkgs was resolved.
 #[derive(Debug, Clone)]
 pub enum NixpkgsSource {
+    /// Explicit pin from `[tool.uv-nix].nixpkgs` (flake ref).
+    ExplicitPin { flake_ref: String },
     /// From a flake.lock file (pinned rev).
     FlakeLock { rev: String },
-    /// From `[tool.uv-nix].nixpkgs` in pyproject.toml (flake ref).
-    PyprojectToml { flake_ref: String },
     /// From a devenv.lock file (pinned rev).
     DevenvLock { rev: String },
+    /// From a .flox/env/manifest.lock file (pinned rev).
+    FloxLock { rev: String },
     /// Auto-resolved from latest nixpkgs-unstable (written to pyproject.toml).
     AutoResolved { rev: String },
 }
 
 /// Resolve the nixpkgs source for a given project directory and config.
 ///
-/// Priority: flake.lock → pyproject.toml pin → devenv.lock → auto-resolve + pin
+/// Priority:
+/// 1. `[tool.uv-nix].nixpkgs` — explicit flake ref, always wins
+/// 2. `[tool.uv-nix].use` — go directly to that source (error if not found)
+/// 3. Auto-detect chain: flake.lock → devenv.lock → .flox/env/manifest.lock
+/// 4. Auto-resolve latest nixpkgs-unstable + pin to pyproject.toml
 pub fn resolve_nixpkgs(project_dir: &Path, config: &UvNixConfig) -> NixpkgsSource {
-    // 1. flake.lock
-    if let Some(rev) = parse_flake_lock(project_dir) {
-        debug!("Resolved nixpkgs from flake.lock: {rev}");
-        return NixpkgsSource::FlakeLock { rev };
-    }
-
-    // 2. Explicit pin in pyproject.toml
+    // 1. Explicit pin in pyproject.toml
     if let Some(ref flake_ref) = config.nixpkgs {
         debug!("Using nixpkgs from pyproject.toml: {flake_ref}");
-        return NixpkgsSource::PyprojectToml {
+        return NixpkgsSource::ExplicitPin {
             flake_ref: flake_ref.clone(),
         };
     }
 
-    // 3. devenv.lock
-    if let Some(rev) = parse_devenv_lock(project_dir) {
-        debug!("Resolved nixpkgs from devenv.lock: {rev}");
-        return NixpkgsSource::DevenvLock { rev };
+    // 2. Explicit source selection via `use`
+    if let Some(ref source) = config.use_source {
+        debug!("Using nixpkgs source from [tool.uv-nix].use: {source:?}");
+        return resolve_from_source(project_dir, config, source);
+    }
+
+    // 3. Auto-detect chain
+    if let Some(source) = auto_detect(project_dir, config) {
+        return source;
     }
 
     // 4. Auto-resolve latest nixpkgs-unstable and pin to pyproject.toml
@@ -51,12 +56,118 @@ pub fn resolve_nixpkgs(project_dir: &Path, config: &UvNixConfig) -> NixpkgsSourc
             NixpkgsSource::AutoResolved { rev }
         }
         None => {
-            // Last resort: use a known recent rev (better than failing)
             tracing::warn!("Failed to auto-resolve nixpkgs, using hardcoded fallback");
             NixpkgsSource::AutoResolved {
                 rev: "nixos-unstable".to_string(),
             }
         }
+    }
+}
+
+/// Resolve from a specific source (when `[tool.uv-nix].use` is set).
+/// Warns if the lockfile is not found rather than silently falling through.
+fn resolve_from_source(
+    project_dir: &Path,
+    config: &UvNixConfig,
+    source: &UseSource,
+) -> NixpkgsSource {
+    let custom_path = config.lock_path_for(source);
+
+    match source {
+        UseSource::FlakeLock => {
+            let path = custom_path.unwrap_or("flake.lock");
+            let lock_path = project_dir.join(path);
+            match parse_flake_lock(&lock_path) {
+                Some(rev) => {
+                    debug!("Resolved nixpkgs from {}: {rev}", lock_path.display());
+                    NixpkgsSource::FlakeLock { rev }
+                }
+                None => {
+                    tracing::warn!(
+                        "use = \"flake.lock\" but {} not found or has no nixpkgs input",
+                        lock_path.display()
+                    );
+                    fallback_auto_resolve(project_dir)
+                }
+            }
+        }
+        UseSource::Devenv => {
+            let path = custom_path.unwrap_or("devenv.lock");
+            let lock_path = project_dir.join(path);
+            match parse_devenv_lock(&lock_path) {
+                Some(rev) => {
+                    debug!("Resolved nixpkgs from {}: {rev}", lock_path.display());
+                    NixpkgsSource::DevenvLock { rev }
+                }
+                None => {
+                    tracing::warn!(
+                        "use = \"devenv\" but {} not found or has no nixpkgs input",
+                        lock_path.display()
+                    );
+                    fallback_auto_resolve(project_dir)
+                }
+            }
+        }
+        UseSource::Flox => {
+            let path = custom_path.unwrap_or(".flox/env/manifest.lock");
+            let lock_path = project_dir.join(path);
+            match parse_flox_lock(&lock_path) {
+                Some(rev) => {
+                    debug!("Resolved nixpkgs from {}: {rev}", lock_path.display());
+                    NixpkgsSource::FloxLock { rev }
+                }
+                None => {
+                    tracing::warn!(
+                        "use = \"flox\" but {} not found or has no nixpkgs rev",
+                        lock_path.display()
+                    );
+                    fallback_auto_resolve(project_dir)
+                }
+            }
+        }
+    }
+}
+
+/// Auto-detect nixpkgs from available lockfiles.
+/// Tries: flake.lock → devenv.lock → .flox/env/manifest.lock
+fn auto_detect(project_dir: &Path, config: &UvNixConfig) -> Option<NixpkgsSource> {
+    // flake.lock
+    let flake_path = config
+        .lock_path_for(&UseSource::FlakeLock)
+        .unwrap_or("flake.lock");
+    if let Some(rev) = parse_flake_lock(&project_dir.join(flake_path)) {
+        debug!("Resolved nixpkgs from flake.lock: {rev}");
+        return Some(NixpkgsSource::FlakeLock { rev });
+    }
+
+    // devenv.lock
+    let devenv_path = config
+        .lock_path_for(&UseSource::Devenv)
+        .unwrap_or("devenv.lock");
+    if let Some(rev) = parse_devenv_lock(&project_dir.join(devenv_path)) {
+        debug!("Resolved nixpkgs from devenv.lock: {rev}");
+        return Some(NixpkgsSource::DevenvLock { rev });
+    }
+
+    // .flox/env/manifest.lock
+    let flox_path = config
+        .lock_path_for(&UseSource::Flox)
+        .unwrap_or(".flox/env/manifest.lock");
+    if let Some(rev) = parse_flox_lock(&project_dir.join(flox_path)) {
+        debug!("Resolved nixpkgs from .flox/env/manifest.lock: {rev}");
+        return Some(NixpkgsSource::FloxLock { rev });
+    }
+
+    None
+}
+
+/// Fallback when an explicit `use` source fails to resolve.
+fn fallback_auto_resolve(project_dir: &Path) -> NixpkgsSource {
+    match auto_resolve_nixpkgs(project_dir) {
+        Some(rev) => NixpkgsSource::AutoResolved { rev },
+        None => NixpkgsSource::AutoResolved {
+            rev: "nixos-unstable".to_string(),
+        },
     }
 }
 
@@ -68,6 +179,7 @@ fn auto_resolve_nixpkgs(project_dir: &Path) -> Option<String> {
     // Write pin to pyproject.toml if it exists
     let pyproject = project_dir.join("pyproject.toml");
     if pyproject.is_file() {
+        crate::status("Pinning", &format!("nixpkgs-unstable ({}) in pyproject.toml", &rev[..12]));
         if let Err(err) = write_nixpkgs_pin(&pyproject, &rev) {
             tracing::warn!("Failed to write nixpkgs pin to pyproject.toml: {err}");
         } else {
@@ -102,55 +214,72 @@ fn resolve_latest_nixpkgs_rev() -> Option<String> {
 }
 
 /// Write a nixpkgs pin to pyproject.toml under `[tool.uv-nix]`.
+///
+/// Uses toml_edit to preserve existing formatting, comments, and ordering.
 fn write_nixpkgs_pin(pyproject_path: &Path, rev: &str) -> anyhow::Result<()> {
     let content = std::fs::read_to_string(pyproject_path)?;
-
-    // Don't overwrite an existing pin
-    if content.contains("nixpkgs") && content.contains("[tool.uv-nix]") {
-        return Ok(());
-    }
+    let mut doc: toml_edit::DocumentMut = content.parse()?;
 
     let pin_value = format!("github:NixOS/nixpkgs/{rev}");
 
-    let new_content = if content.contains("[tool.uv-nix]") {
-        // Section exists, add nixpkgs after the header
-        content.replace(
-            "[tool.uv-nix]",
-            &format!("[tool.uv-nix]\nnixpkgs = \"{pin_value}\""),
-        )
-    } else {
-        // Append new section
-        format!("{content}\n[tool.uv-nix]\nnixpkgs = \"{pin_value}\"\n")
-    };
+    // Navigate to tool.uv-nix, creating sections as needed
+    let tool = doc.entry("tool").or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+    let tool_table = tool.as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[tool] is not a table"))?;
+    tool_table.set_implicit(true);
 
-    std::fs::write(pyproject_path, new_content)?;
+    let uv_nix = tool_table.entry("uv-nix").or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+    let uv_nix_table = uv_nix.as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[tool.uv-nix] is not a table"))?;
+
+    // Don't overwrite an existing pin
+    if uv_nix_table.contains_key("nixpkgs") {
+        return Ok(());
+    }
+
+    uv_nix_table.insert("nixpkgs", toml_edit::value(&pin_value));
+
+    std::fs::write(pyproject_path, doc.to_string())?;
     Ok(())
 }
 
 /// Build a Nix expression that imports nixpkgs from the resolved source.
+///
+/// Uses `builtins.fetchTree` with an explicit system string so the expression
+/// is pure (no `--impure` needed) for rev-based sources.
+///
+/// For explicit flake ref pins, uses `builtins.getFlake` which requires `--impure`.
 pub fn nixpkgs_import_expr(source: &NixpkgsSource) -> String {
+    let system = crate::current_system();
     match source {
         NixpkgsSource::FlakeLock { rev }
         | NixpkgsSource::DevenvLock { rev }
+        | NixpkgsSource::FloxLock { rev }
         | NixpkgsSource::AutoResolved { rev } => {
             format!(
-                "import (fetchTarball \"https://github.com/NixOS/nixpkgs/archive/{rev}.tar.gz\") {{}}"
+                "import (builtins.fetchTree {{ type = \"github\"; owner = \"NixOS\"; repo = \"nixpkgs\"; rev = \"{rev}\"; }}) {{ system = \"{system}\"; }}"
             )
         }
-        NixpkgsSource::PyprojectToml { flake_ref } => {
+        NixpkgsSource::ExplicitPin { flake_ref } => {
             format!(
-                "(builtins.getFlake \"{flake_ref}\").legacyPackages.${{builtins.currentSystem}}"
+                "(builtins.getFlake \"{flake_ref}\").legacyPackages.\"{system}\""
             )
         }
     }
+}
+
+/// Whether the given source requires `--impure` for nix evaluation.
+pub fn requires_impure(source: &NixpkgsSource) -> bool {
+    matches!(source, NixpkgsSource::ExplicitPin { .. })
 }
 
 /// Get a stable identifier for the nixpkgs source (used as cache key component).
 pub fn nixpkgs_cache_key(source: &NixpkgsSource) -> String {
     match source {
+        NixpkgsSource::ExplicitPin { flake_ref } => format!("explicit:{flake_ref}"),
         NixpkgsSource::FlakeLock { rev } => format!("flake-lock:{rev}"),
-        NixpkgsSource::PyprojectToml { flake_ref } => format!("pyproject:{flake_ref}"),
         NixpkgsSource::DevenvLock { rev } => format!("devenv-lock:{rev}"),
+        NixpkgsSource::FloxLock { rev } => format!("flox-lock:{rev}"),
         NixpkgsSource::AutoResolved { rev } => format!("auto:{rev}"),
     }
 }
@@ -207,11 +336,14 @@ pub fn resolve_build_paths(
 
     debug!("Building nix expression for build paths");
 
-    let output = crate::nix_command()
-        .arg("build")
+    let mut cmd = crate::nix_command();
+    cmd.arg("build")
         .arg("--no-link")
-        .arg("--print-out-paths")
-        .arg("--impure")
+        .arg("--print-out-paths");
+    if requires_impure(source) {
+        cmd.arg("--impure");
+    }
+    let output = cmd
         .arg("--expr")
         .arg(&expr)
         .output()?;
@@ -272,10 +404,13 @@ pub fn resolve_library_paths(
 
     debug!("Evaluating nix expression for extra libraries");
 
-    let output = crate::nix_command()
-        .arg("eval")
-        .arg("--raw")
-        .arg("--impure")
+    let mut cmd = crate::nix_command();
+    cmd.arg("eval")
+        .arg("--raw");
+    if requires_impure(source) {
+        cmd.arg("--impure");
+    }
+    let output = cmd
         .arg("--expr")
         .arg(&expr)
         .output()?;
@@ -290,7 +425,9 @@ pub fn resolve_library_paths(
     Ok(result)
 }
 
-// --- Lock file parsing ---
+// =============================================================================
+// Lock file parsers
+// =============================================================================
 
 /// Minimal flake.lock structure.
 #[derive(Debug, Deserialize)]
@@ -313,9 +450,8 @@ struct FlakeLocked {
 }
 
 /// Parse flake.lock to find the nixpkgs input's pinned rev.
-fn parse_flake_lock(project_dir: &Path) -> Option<String> {
-    let lock_path = project_dir.join("flake.lock");
-    let content = std::fs::read_to_string(&lock_path).ok()?;
+fn parse_flake_lock(lock_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(lock_path).ok()?;
     let lock: FlakeLock = serde_json::from_str(&content).ok()?;
 
     // Find the root node and look for a "nixpkgs" input
@@ -380,9 +516,8 @@ struct DevenvOriginal {
 }
 
 /// Parse devenv.lock to find a NixOS/nixpkgs pinned rev.
-fn parse_devenv_lock(project_dir: &Path) -> Option<String> {
-    let lock_path = project_dir.join("devenv.lock");
-    let content = std::fs::read_to_string(&lock_path).ok()?;
+fn parse_devenv_lock(lock_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(lock_path).ok()?;
     let lock: DevenvLock = serde_json::from_str(&content).ok()?;
 
     // Look for any node that points to NixOS/nixpkgs
@@ -394,6 +529,40 @@ fn parse_devenv_lock(project_dir: &Path) -> Option<String> {
                 if locked.lock_type.as_deref() == Some("github") {
                     return locked.rev.clone();
                 }
+            }
+        }
+    }
+    None
+}
+
+/// Minimal flox manifest.lock structure.
+///
+/// Flox stores packages as an array. Each entry has a `rev` field directly
+/// and a `locked_url` like `https://github.com/flox/nixpkgs?rev=<hash>`.
+/// Note: Flox uses their own fork (flox/nixpkgs), not NixOS/nixpkgs.
+#[derive(Debug, Deserialize)]
+struct FloxManifestLock {
+    packages: Option<Vec<FloxPackageEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FloxPackageEntry {
+    rev: Option<String>,
+}
+
+/// Parse .flox/env/manifest.lock to find a nixpkgs rev.
+///
+/// Extracts the `rev` field from the first package entry that has one.
+/// All packages in a flox lock typically share the same nixpkgs rev.
+fn parse_flox_lock(lock_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(lock_path).ok()?;
+    let lock: FloxManifestLock = serde_json::from_str(&content).ok()?;
+
+    let packages = lock.packages?;
+    for pkg in &packages {
+        if let Some(ref rev) = pkg.rev {
+            if rev.len() >= 40 {
+                return Some(rev.clone());
             }
         }
     }
@@ -440,7 +609,7 @@ mod tests {
         )
         .unwrap();
 
-        let rev = parse_flake_lock(dir.path()).unwrap();
+        let rev = parse_flake_lock(&dir.path().join("flake.lock")).unwrap();
         assert_eq!(rev, "abc123def456");
     }
 
@@ -466,8 +635,49 @@ mod tests {
         )
         .unwrap();
 
-        let rev = parse_devenv_lock(dir.path()).unwrap();
+        let rev = parse_devenv_lock(&dir.path().join("devenv.lock")).unwrap();
         assert_eq!(rev, "def789ghi012");
+    }
+
+    #[test]
+    fn test_parse_flox_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("manifest.lock"),
+            r#"{
+  "lockfile-version": 1,
+  "manifest": {
+    "schema-version": "1.12.0",
+    "install": { "python3": { "pkg-path": "python3" } }
+  },
+  "packages": [
+    {
+      "attr_path": "python3",
+      "install_id": "python3",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=64c08a7ca051951c8eae34e3e3cb1e202fe36786",
+      "rev": "64c08a7ca051951c8eae34e3e3cb1e202fe36786",
+      "version": "3.13.13",
+      "system": "x86_64-linux"
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let rev = parse_flox_lock(&dir.path().join("manifest.lock")).unwrap();
+        assert_eq!(rev, "64c08a7ca051951c8eae34e3e3cb1e202fe36786");
+    }
+
+    #[test]
+    fn test_parse_flox_lock_no_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("manifest.lock"),
+            r#"{ "lockfile-version": 1, "manifest": {}, "packages": [] }"#,
+        )
+        .unwrap();
+
+        assert!(parse_flox_lock(&dir.path().join("manifest.lock")).is_none());
     }
 
     #[test]
@@ -476,17 +686,438 @@ mod tests {
             rev: "abc123".to_string(),
         });
         assert!(expr.contains("abc123"));
-        assert!(expr.contains("fetchTarball"));
+        assert!(expr.contains("fetchTree"));
+        assert!(expr.contains("system"));
+        assert!(!requires_impure(&NixpkgsSource::FlakeLock {
+            rev: "abc123".to_string(),
+        }));
 
         let expr = nixpkgs_import_expr(&NixpkgsSource::AutoResolved {
             rev: "abc456".to_string(),
         });
         assert!(expr.contains("abc456"));
-        assert!(expr.contains("fetchTarball"));
+        assert!(expr.contains("fetchTree"));
 
-        let expr = nixpkgs_import_expr(&NixpkgsSource::PyprojectToml {
+        let expr = nixpkgs_import_expr(&NixpkgsSource::ExplicitPin {
             flake_ref: "github:NixOS/nixpkgs/nixos-24.11".to_string(),
         });
         assert!(expr.contains("builtins.getFlake"));
+        assert!(requires_impure(&NixpkgsSource::ExplicitPin {
+            flake_ref: "github:NixOS/nixpkgs/nixos-24.11".to_string(),
+        }));
+
+        let expr = nixpkgs_import_expr(&NixpkgsSource::FloxLock {
+            rev: "flox123".to_string(),
+        });
+        assert!(expr.contains("flox123"));
+        assert!(expr.contains("fetchTree"));
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_explicit_pin_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write a flake.lock that would normally be picked up
+        fs::write(
+            dir.path().join("flake.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": { "owner": "NixOS", "repo": "nixpkgs", "rev": "flake-rev", "type": "github" }
+    },
+    "root": { "inputs": { "nixpkgs": "nixpkgs" } }
+  },
+  "root": "root",
+  "version": 7
+}"#,
+        )
+        .unwrap();
+
+        let config = UvNixConfig {
+            nixpkgs: Some("github:NixOS/nixpkgs/my-explicit-pin".to_string()),
+            ..Default::default()
+        };
+
+        let source = resolve_nixpkgs(dir.path(), &config);
+        match source {
+            NixpkgsSource::ExplicitPin { flake_ref } => {
+                assert_eq!(flake_ref, "github:NixOS/nixpkgs/my-explicit-pin");
+            }
+            other => panic!("Expected ExplicitPin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_auto_detect_flake_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("flake.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": { "owner": "NixOS", "repo": "nixpkgs", "rev": "detected-rev", "type": "github" }
+    },
+    "root": { "inputs": { "nixpkgs": "nixpkgs" } }
+  },
+  "root": "root",
+  "version": 7
+}"#,
+        )
+        .unwrap();
+
+        let config = UvNixConfig::default();
+        let source = resolve_nixpkgs(dir.path(), &config);
+        match source {
+            NixpkgsSource::FlakeLock { rev } => assert_eq!(rev, "detected-rev"),
+            other => panic!("Expected FlakeLock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_use_directive() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write both flake.lock and devenv.lock
+        fs::write(
+            dir.path().join("flake.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": { "owner": "NixOS", "repo": "nixpkgs", "rev": "flake-rev", "type": "github" }
+    },
+    "root": { "inputs": { "nixpkgs": "nixpkgs" } }
+  },
+  "root": "root",
+  "version": 7
+}"#,
+        )
+        .unwrap();
+
+        fs::write(
+            dir.path().join("devenv.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": { "rev": "devenv-rev", "type": "github" },
+      "original": { "owner": "NixOS", "repo": "nixpkgs" }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        // use = "devenv" should skip flake.lock and go to devenv.lock
+        let config = UvNixConfig {
+            use_source: Some(UseSource::Devenv),
+            ..Default::default()
+        };
+
+        let source = resolve_nixpkgs(dir.path(), &config);
+        match source {
+            NixpkgsSource::DevenvLock { rev } => assert_eq!(rev, "devenv-rev"),
+            other => panic!("Expected DevenvLock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_auto_detect_devenv_when_no_flake() {
+        let dir = tempfile::tempdir().unwrap();
+        // Only devenv.lock, no flake.lock
+        fs::write(
+            dir.path().join("devenv.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": { "rev": "devenv-only-rev", "type": "github" },
+      "original": { "owner": "NixOS", "repo": "nixpkgs" }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let config = UvNixConfig::default();
+        let source = resolve_nixpkgs(dir.path(), &config);
+        match source {
+            NixpkgsSource::DevenvLock { rev } => assert_eq!(rev, "devenv-only-rev"),
+            other => panic!("Expected DevenvLock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_auto_detect_flox_when_no_flake_or_devenv() {
+        let dir = tempfile::tempdir().unwrap();
+        // Only .flox/env/manifest.lock
+        fs::create_dir_all(dir.path().join(".flox/env")).unwrap();
+        fs::write(
+            dir.path().join(".flox/env/manifest.lock"),
+            r#"{
+  "lockfile-version": 1,
+  "manifest": {},
+  "packages": [
+    {
+      "attr_path": "python3",
+      "rev": "abcdef1234567890abcdef1234567890abcdef12",
+      "version": "3.13.0",
+      "system": "x86_64-linux"
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let config = UvNixConfig::default();
+        let source = resolve_nixpkgs(dir.path(), &config);
+        match source {
+            NixpkgsSource::FloxLock { rev } => {
+                assert_eq!(rev, "abcdef1234567890abcdef1234567890abcdef12")
+            }
+            other => panic!("Expected FloxLock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_flake_lock_wins_over_devenv() {
+        let dir = tempfile::tempdir().unwrap();
+        // Both flake.lock and devenv.lock present
+        fs::write(
+            dir.path().join("flake.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": { "owner": "NixOS", "repo": "nixpkgs", "rev": "flake-wins", "type": "github" }
+    },
+    "root": { "inputs": { "nixpkgs": "nixpkgs" } }
+  },
+  "root": "root",
+  "version": 7
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("devenv.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": { "rev": "devenv-loses", "type": "github" },
+      "original": { "owner": "NixOS", "repo": "nixpkgs" }
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let config = UvNixConfig::default();
+        let source = resolve_nixpkgs(dir.path(), &config);
+        match source {
+            NixpkgsSource::FlakeLock { rev } => assert_eq!(rev, "flake-wins"),
+            other => panic!("Expected FlakeLock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_custom_lock_path() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write flake.lock in a subdirectory
+        fs::create_dir_all(dir.path().join("subdir")).unwrap();
+        fs::write(
+            dir.path().join("subdir/flake.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": { "owner": "NixOS", "repo": "nixpkgs", "rev": "custom-path-rev", "type": "github" }
+    },
+    "root": { "inputs": { "nixpkgs": "nixpkgs" } }
+  },
+  "root": "root",
+  "version": 7
+}"#,
+        )
+        .unwrap();
+
+        let config = UvNixConfig {
+            use_source: Some(UseSource::FlakeLock),
+            flake: Some(crate::config::SourceConfig {
+                lock: Some("subdir/flake.lock".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        let source = resolve_nixpkgs(dir.path(), &config);
+        match source {
+            NixpkgsSource::FlakeLock { rev } => assert_eq!(rev, "custom-path-rev"),
+            other => panic!("Expected FlakeLock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_use_missing_lockfile_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        // use = "devenv" but no devenv.lock exists — should fall back to auto-resolve
+        let config = UvNixConfig {
+            use_source: Some(UseSource::Devenv),
+            ..Default::default()
+        };
+
+        let source = resolve_nixpkgs(dir.path(), &config);
+        match source {
+            NixpkgsSource::AutoResolved { .. } => {} // expected
+            other => panic!("Expected AutoResolved fallback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_flake_lock_follows_style() {
+        // Test the "follows" style where nixpkgs input is referenced via an array path
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("flake.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "follows-rev-123",
+        "type": "github"
+      }
+    },
+    "devenv": {
+      "inputs": {
+        "nixpkgs": ["nixpkgs"]
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "devenv": "devenv"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}"#,
+        )
+        .unwrap();
+
+        let rev = parse_flake_lock(&dir.path().join("flake.lock")).unwrap();
+        assert_eq!(rev, "follows-rev-123");
+    }
+
+    #[test]
+    fn test_parse_flake_lock_not_nixpkgs_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("flake.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "owner": "someuser",
+        "repo": "not-nixpkgs",
+        "rev": "abc123",
+        "type": "github"
+      }
+    },
+    "root": { "inputs": { "nixpkgs": "nixpkgs" } }
+  },
+  "root": "root",
+  "version": 7
+}"#,
+        )
+        .unwrap();
+
+        assert!(parse_flake_lock(&dir.path().join("flake.lock")).is_none());
+    }
+
+    #[test]
+    fn test_write_nixpkgs_pin_creates_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let pyproject = dir.path().join("pyproject.toml");
+        fs::write(
+            &pyproject,
+            r#"[project]
+name = "my-project"
+version = "1.0.0"
+"#,
+        )
+        .unwrap();
+
+        write_nixpkgs_pin(&pyproject, "abc123def456").unwrap();
+
+        let result = fs::read_to_string(&pyproject).unwrap();
+        assert!(result.contains("[tool.uv-nix]"), "missing section:\n{result}");
+        assert!(
+            result.contains(r#"nixpkgs = "github:NixOS/nixpkgs/abc123def456""#),
+            "missing pin:\n{result}"
+        );
+        // Original content preserved
+        assert!(result.contains("[project]"), "lost [project]:\n{result}");
+        assert!(result.contains("my-project"), "lost project name:\n{result}");
+    }
+
+    #[test]
+    fn test_write_nixpkgs_pin_existing_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let pyproject = dir.path().join("pyproject.toml");
+        fs::write(
+            &pyproject,
+            r#"[project]
+name = "my-project"
+
+# Custom nix config
+[tool.uv-nix]
+extra-libraries = ["libGL"]
+"#,
+        )
+        .unwrap();
+
+        write_nixpkgs_pin(&pyproject, "abc123def456").unwrap();
+
+        let result = fs::read_to_string(&pyproject).unwrap();
+        assert!(
+            result.contains(r#"nixpkgs = "github:NixOS/nixpkgs/abc123def456""#),
+            "missing pin:\n{result}"
+        );
+        // Existing config preserved
+        assert!(result.contains(r#"extra-libraries = ["libGL"]"#), "lost existing config:\n{result}");
+        // Comment preserved
+        assert!(result.contains("# Custom nix config"), "lost comment:\n{result}");
+    }
+
+    #[test]
+    fn test_write_nixpkgs_pin_no_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let pyproject = dir.path().join("pyproject.toml");
+        let original = r#"[tool.uv-nix]
+nixpkgs = "github:NixOS/nixpkgs/existing-pin"
+"#;
+        fs::write(&pyproject, original).unwrap();
+
+        write_nixpkgs_pin(&pyproject, "new-rev-should-not-appear").unwrap();
+
+        let result = fs::read_to_string(&pyproject).unwrap();
+        assert!(result.contains("existing-pin"), "overwrote existing pin:\n{result}");
+        assert!(
+            !result.contains("new-rev-should-not-appear"),
+            "should not overwrite:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_nixpkgs_cache_key() {
+        assert_eq!(
+            nixpkgs_cache_key(&NixpkgsSource::FlakeLock { rev: "abc".to_string() }),
+            "flake-lock:abc"
+        );
+        assert_eq!(
+            nixpkgs_cache_key(&NixpkgsSource::FloxLock { rev: "def".to_string() }),
+            "flox-lock:def"
+        );
+        assert_eq!(
+            nixpkgs_cache_key(&NixpkgsSource::ExplicitPin {
+                flake_ref: "github:NixOS/nixpkgs/nixos-24.11".to_string()
+            }),
+            "explicit:github:NixOS/nixpkgs/nixos-24.11"
+        );
     }
 }

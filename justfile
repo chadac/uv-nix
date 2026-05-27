@@ -54,8 +54,18 @@ test-patch: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test python_patch
 
 # Run Docker-based integration tests (pytest)
-test-docker: build
-    cd tests/docker && UV_BIN="$(pwd)/../../uv/target/debug/uv" uv run pytest -v -n auto -m 'not slow and not source_build'
+# Usage: just test-docker [filter]
+# Examples: just test-docker mysqlclient, just test-docker "psycopg or pynacl"
+test-docker *FILTER: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd tests/docker
+    UV_BIN="$(pwd)/../../uv/target/debug/uv"
+    if [ -n "{{FILTER}}" ]; then
+        UV_BIN="$UV_BIN" uv run pytest -v -n auto -m 'not slow and not source_build' -k "{{FILTER}}"
+    else
+        UV_BIN="$UV_BIN" uv run pytest -v -n auto -m 'not slow and not source_build'
+    fi
 
 # Run a specific package test
 test-pkg PKG: build

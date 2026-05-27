@@ -149,6 +149,45 @@ impl PackageConfig {
     }
 }
 
+/// Which lockfile source to use for nixpkgs resolution.
+///
+/// Configured via `[tool.uv-nix].use` in pyproject.toml.
+/// Valid values: `"flake.lock"`, `"devenv"`, `"flox"`
+#[derive(Debug, Clone, PartialEq)]
+pub enum UseSource {
+    FlakeLock,
+    Devenv,
+    Flox,
+}
+
+impl<'de> Deserialize<'de> for UseSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "flake.lock" | "flake" => Ok(UseSource::FlakeLock),
+            "devenv" | "devenv.lock" => Ok(UseSource::Devenv),
+            "flox" | "flox.lock" => Ok(UseSource::Flox),
+            _ => Err(serde::de::Error::custom(format!(
+                "unknown source '{}', expected one of: flake.lock, devenv, flox",
+                s
+            ))),
+        }
+    }
+}
+
+/// Per-source configuration (e.g., custom lock file paths).
+///
+/// Configured via `[tool.uv-nix.flake]`, `[tool.uv-nix.devenv]`, etc.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SourceConfig {
+    /// Custom path to the lock file (relative to pyproject.toml).
+    pub lock: Option<String>,
+}
+
 /// The `[tool.uv-nix]` section from pyproject.toml.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -160,6 +199,23 @@ pub struct UvNixConfig {
 
     /// Optional explicit nixpkgs pin (overrides auto-detection).
     pub nixpkgs: Option<String>,
+
+    /// Which lockfile source to use for nixpkgs resolution.
+    /// When set, skips auto-detection and goes directly to this source.
+    #[serde(rename = "use")]
+    pub use_source: Option<UseSource>,
+
+    /// Per-source configuration for flake.lock.
+    #[serde(default)]
+    pub flake: Option<SourceConfig>,
+
+    /// Per-source configuration for devenv.
+    #[serde(default)]
+    pub devenv: Option<SourceConfig>,
+
+    /// Per-source configuration for flox.
+    #[serde(default)]
+    pub flox: Option<SourceConfig>,
 
     /// Per-package build configurations.
     #[serde(default, rename = "package")]
@@ -176,7 +232,21 @@ impl UvNixConfig {
     pub fn has_config(&self) -> bool {
         !self.extra_libraries.is_empty()
             || self.nixpkgs.is_some()
+            || self.use_source.is_some()
+            || self.flake.is_some()
+            || self.devenv.is_some()
+            || self.flox.is_some()
             || !self.packages.is_empty()
+    }
+
+    /// Get the custom lock path for a given source, if configured.
+    pub fn lock_path_for(&self, source: &UseSource) -> Option<&str> {
+        let config = match source {
+            UseSource::FlakeLock => self.flake.as_ref(),
+            UseSource::Devenv => self.devenv.as_ref(),
+            UseSource::Flox => self.flox.as_ref(),
+        };
+        config.and_then(|c| c.lock.as_deref())
     }
 
     /// Get extra libraries filtered for a specific system.
@@ -437,6 +507,103 @@ extra-libraries = [
         let aarch64_linux_libs = config.extra_libraries_for_system("aarch64-linux");
         assert!(aarch64_linux_libs.contains(&"libdrm".to_string()));
         assert!(!aarch64_linux_libs.contains(&"cudaPackages.cudatoolkit".to_string()));
+    }
+
+    #[test]
+    fn test_parse_use_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("pyproject.toml");
+        fs::write(
+            &toml_path,
+            r#"
+[tool.uv-nix]
+use = "flake.lock"
+"#,
+        )
+        .unwrap();
+
+        let (config, _) = find_config(dir.path()).unwrap();
+        assert_eq!(config.use_source, Some(UseSource::FlakeLock));
+    }
+
+    #[test]
+    fn test_parse_use_source_devenv() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("pyproject.toml");
+        fs::write(
+            &toml_path,
+            r#"
+[tool.uv-nix]
+use = "devenv"
+"#,
+        )
+        .unwrap();
+
+        let (config, _) = find_config(dir.path()).unwrap();
+        assert_eq!(config.use_source, Some(UseSource::Devenv));
+    }
+
+    #[test]
+    fn test_parse_use_source_flox() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("pyproject.toml");
+        fs::write(
+            &toml_path,
+            r#"
+[tool.uv-nix]
+use = "flox"
+"#,
+        )
+        .unwrap();
+
+        let (config, _) = find_config(dir.path()).unwrap();
+        assert_eq!(config.use_source, Some(UseSource::Flox));
+    }
+
+    #[test]
+    fn test_parse_source_config_custom_lock_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("pyproject.toml");
+        fs::write(
+            &toml_path,
+            r#"
+[tool.uv-nix]
+use = "flake.lock"
+
+[tool.uv-nix.flake]
+lock = "subdir/flake.lock"
+
+[tool.uv-nix.devenv]
+lock = "path/to/devenv.lock"
+
+[tool.uv-nix.flox]
+lock = "custom/.flox/env/manifest.lock"
+"#,
+        )
+        .unwrap();
+
+        let (config, _) = find_config(dir.path()).unwrap();
+        assert_eq!(config.use_source, Some(UseSource::FlakeLock));
+        assert_eq!(
+            config.lock_path_for(&UseSource::FlakeLock),
+            Some("subdir/flake.lock")
+        );
+        assert_eq!(
+            config.lock_path_for(&UseSource::Devenv),
+            Some("path/to/devenv.lock")
+        );
+        assert_eq!(
+            config.lock_path_for(&UseSource::Flox),
+            Some("custom/.flox/env/manifest.lock")
+        );
+    }
+
+    #[test]
+    fn test_lock_path_for_defaults_to_none() {
+        let config = UvNixConfig::default();
+        assert_eq!(config.lock_path_for(&UseSource::FlakeLock), None);
+        assert_eq!(config.lock_path_for(&UseSource::Devenv), None);
+        assert_eq!(config.lock_path_for(&UseSource::Flox), None);
     }
 
     #[test]

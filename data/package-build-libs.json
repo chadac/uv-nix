@@ -22,7 +22,7 @@
     "libs": ["libev"]
   },
   "borgbackup": {
-    "libs": ["openssl"],
+    "libs": ["openssl", "lz4", "zstd", "xxHash"],
     "libs-linux": ["acl"]
   },
   "cffi": {
@@ -72,16 +72,19 @@
     "libs": ["yajl"]
   },
   "kerberos": {
-    "libs": ["libkrb5"]
+    "libs": ["libkrb5"],
+    "build-tools": ["libkrb5"]
   },
   "lxml": {
     "libs": ["libxml2", "libxslt", "zlib"]
   },
   "m2crypto": {
-    "libs": ["openssl"]
+    "libs": ["openssl"],
+    "build-tools": ["swig"]
   },
   "mariadb": {
-    "libs": ["libmysqlclient"]
+    "libs": ["libmysqlclient"],
+    "build-tools": ["libmysqlclient"]
   },
   "matplotlib": {
     "libs": ["libpng", "freetype", "cairo", "tcl", "tk"]
@@ -90,7 +93,8 @@
     "libs": ["mpi"]
   },
   "mysqlclient": {
-    "libs": ["libmysqlclient"]
+    "libs": ["libmysqlclient"],
+    "build-tools": ["libmysqlclient"]
   },
   "netcdf4": {
     "libs": ["zlib", "netcdf", "hdf5", "curl", "libjpeg"]
@@ -137,7 +141,8 @@
     "libs": ["arrow-cpp"]
   },
   "pycairo": {
-    "libs": ["cairo"]
+    "libs": ["cairo"],
+    "build-tools": ["ninja", "meson"]
   },
   "pycurl": {
     "libs": ["curl"]

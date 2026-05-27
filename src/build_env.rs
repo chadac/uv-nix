@@ -110,7 +110,7 @@ pub fn get_effective_package_config(package_name: &str) -> EffectivePackageConfi
 
     // Determine nixpkgs source
     let source = if let Some(ref custom_nixpkgs) = custom_config.and_then(|c| c.nixpkgs.as_ref()) {
-        nixpkgs::NixpkgsSource::PyprojectToml { flake_ref: custom_nixpkgs.to_string() }
+        nixpkgs::NixpkgsSource::ExplicitPin { flake_ref: custom_nixpkgs.to_string() }
     } else {
         nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config)
     };
@@ -238,7 +238,7 @@ fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
 
     // Determine nixpkgs source (per-package override or project default)
     let source = if let Some(ref custom_nixpkgs) = custom_config.and_then(|c| c.nixpkgs.as_ref()) {
-        nixpkgs::NixpkgsSource::PyprojectToml { flake_ref: custom_nixpkgs.to_string() }
+        nixpkgs::NixpkgsSource::ExplicitPin { flake_ref: custom_nixpkgs.to_string() }
     } else {
         nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config)
     };

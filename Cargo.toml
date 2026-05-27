@@ -10,6 +10,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 sha2 = { version = "0.10" }
 toml = { version = ">=0.8" }
+toml_edit = { version = ">=0.22" }
 tracing = { version = "0.1" }
 walkdir = { version = "2" }
 

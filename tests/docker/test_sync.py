@@ -24,8 +24,7 @@ _build_libs: dict[str, dict] = _build_libs_raw
 
 # --- Import checks ---
 IMPORT_CHECKS = {
-    "psycopg": "import psycopg; print('ok')",
-    "psycopg-binary": "import psycopg; print('ok')",
+    "psycopg[binary]": "import psycopg; print(psycopg.__version__)",
     "psycopg2": "import psycopg2; print(psycopg2.__version__)",
     "pillow": "from PIL import Image; print('ok')",
     "lxml": "from lxml import etree; print(etree.LXML_VERSION)",
@@ -55,7 +54,6 @@ IMPORT_CHECKS = {
     "aiokafka": "import aiokafka; print(aiokafka.__version__)",
     "soundfile": "import soundfile; print(soundfile.__version__)",
     "ruamel-yaml": "from ruamel.yaml import YAML; print('ok')",
-    "ruamel-yaml-clib": "from ruamel.yaml import YAML; print('ok')",
     "tables": "import tables; print(tables.__version__)",
     "pysodium": "import pysodium; print('ok')",
     "plyvel": "import plyvel; print('ok')",
@@ -69,6 +67,9 @@ IMPORT_NAMES = {
     "pillow": "PIL", "pyyaml": "yaml", "psycopg-binary": "psycopg",
     "rpds-py": "rpds", "ruamel-yaml": "ruamel.yaml",
     "ruamel-yaml-clib": "ruamel.yaml", "pyzmq": "zmq", "pycairo": "cairo",
+    "mysqlclient": "MySQLdb", "pynacl": "nacl", "m2crypto": "M2Crypto",
+    "borgbackup": "borg", "openexr": "OpenEXR", "scikit-learn": "sklearn",
+    "argon2-cffi-bindings": "_argon2_cffi_bindings",
 }
 
 
@@ -79,12 +80,28 @@ def _import_check(name: str) -> str:
     return f"import {import_name}; print('ok')"
 
 
-# Packages to skip
+# Packages to skip (can't be tested in this environment)
 SKIP_PACKAGES = {
-    "cysystemd", "dbus-python", "mpi4py", "pyfuse3", "pygame",
-    "pygobject3", "hidapi", "bjoern", "confluent-kafka", "netcdf4",
-    "pyfftw", "pyodbc", "pymssql", "pillow-avif-plugin", "pillow-heif",
-    "psycopg2cffi", "psycopg-c", "psycopg2-binary",
+    # System service dependencies
+    "cysystemd", "dbus-python", "pyfuse3", "pygobject3",
+    # Hardware/driver dependencies
+    "hidapi", "pygame",
+    # External service/protocol dependencies
+    "mpi4py", "confluent-kafka", "pyodbc", "pymssql",
+    # Requires libraries not in nixpkgs or complex setup
+    "bjoern", "netcdf4", "pyfftw",
+    # Alternate builds of other packages (tested via primary name)
+    "pillow-avif-plugin", "pillow-heif", "psycopg2cffi", "psycopg-c", "psycopg2-binary",
+    # Backend-only packages, can't be imported standalone (tested via psycopg[binary])
+    "psycopg-binary",
+    # ctypes/dlopen: needs libpq on LD_LIBRARY_PATH (not RPATH-patchable)
+    "psycopg",
+    # ctypes/dlopen: needs libsodium on LD_LIBRARY_PATH
+    "pysodium",
+    # Broken upstream packaging (needs pkg_resources but doesn't declare it)
+    "pygeos",
+    # C extension can't be imported without ruamel-yaml (tested via ruamel-yaml)
+    "ruamel-yaml-clib",
 }
 
 SLOW_SOURCE_BUILDS = {
@@ -92,17 +109,20 @@ SLOW_SOURCE_BUILDS = {
     "tables", "av", "borgbackup", "pyproj", "openexr",
 }
 
-SOURCE_ONLY = {"psycopg2", "mysqlclient", "mariadb"}
+SOURCE_ONLY = {
+    "psycopg2", "mysqlclient", "mariadb", "kerberos", "jsonslicer",
+    "m2crypto", "pycairo", "borgbackup",
+}
 
 # --- Build test param lists ---
 _wheel_packages: list[str] = []
 for pkg in sorted(_build_libs.keys()):
-    if pkg not in SKIP_PACKAGES:
+    if pkg not in SKIP_PACKAGES and pkg not in SOURCE_ONLY:
         _wheel_packages.append(pkg)
 for pkg in [
     "numpy", "pandas", "scipy", "pyyaml", "cffi", "markupsafe",
     "msgpack", "ujson", "bcrypt", "orjson", "pydantic", "rpds-py",
-    "regex", "psycopg", "psycopg-binary",
+    "regex", "psycopg[binary]",
 ]:
     if pkg not in _wheel_packages and pkg not in SKIP_PACKAGES:
         _wheel_packages.append(pkg)
@@ -129,6 +149,20 @@ SOURCE_BUILD_TESTS = [
     if pkg not in SKIP_PACKAGES and pkg not in SOURCE_ONLY
 ]
 
+# Source-only packages: no wheels on PyPI, always built from source.
+# Tested separately because `uv add` (without --no-binary) already triggers
+# a source build for these.
+SOURCE_ONLY_TESTS = [
+    pytest.param(
+        pkg, _import_check(pkg),
+        id=f"{pkg}-source-only",
+        marks=[pytest.mark.source_build]
+            + ([pytest.mark.slow] if pkg in SLOW_SOURCE_BUILDS else []),
+    )
+    for pkg in sorted(SOURCE_ONLY)
+    if pkg not in SKIP_PACKAGES
+]
+
 
 # --- Test classes ---
 
@@ -153,4 +187,17 @@ class TestSourceBuild:
         )
         assert result.returncode == 0, (
             f"{package} source build failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+
+class TestSourceOnly:
+    """Test source-only packages (no wheels on PyPI)."""
+
+    @pytest.mark.parametrize("package,check", SOURCE_ONLY_TESTS)
+    def test_source_only(self, warmed_image: str, package: str, check: str):
+        result = run_lib_test(
+            package, check, image=warmed_image, timeout=600,
+        )
+        assert result.returncode == 0, (
+            f"{package} source-only build failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         )

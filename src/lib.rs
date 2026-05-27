@@ -1,9 +1,8 @@
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use tracing::{debug, warn};
+use tracing::debug;
 
 use std::process::Command;
 
@@ -12,7 +11,6 @@ pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod ctypes_hook;
-pub mod nix_build;
 pub mod nix_config;
 pub mod nixpkgs;
 pub mod patchelf;
@@ -63,6 +61,18 @@ pub fn status(verb: &str, message: &str) {
     }
 }
 
+/// Print a warning message to stderr matching uv's output style.
+///
+/// Format: `  warning: {message}` — yellow "warning:" prefix.
+pub fn status_warn(message: &str) {
+    use std::io::IsTerminal;
+    if std::io::stderr().is_terminal() {
+        eprintln!("\x1b[1;33m     warning\x1b[0m: {message}");
+    } else {
+        eprintln!("     warning: {message}");
+    }
+}
+
 /// Handler for `uv nix hello`.
 pub fn nix_hello(name: Option<String>) -> anyhow::Result<()> {
     let greeting = match name {
@@ -90,7 +100,7 @@ pub fn post_install_patch(site_packages: &Path) {
         site_packages.display()
     );
     if let Err(err) = patchelf::patch_directory(site_packages, &patch_config) {
-        warn!("Failed to patch site-packages: {err}");
+        status_warn(&format!("Failed to patch site-packages: {err}"));
     }
 }
 
@@ -129,12 +139,12 @@ fn resolve_extra_libraries(start: &Path) -> Option<String> {
     match nixpkgs::resolve_library_paths(&libs, &source) {
         Ok(paths) => {
             if let Err(err) = cache::store(&project_dir, &nix_key, &libs, &paths) {
-                warn!("Failed to cache resolved library paths: {err}");
+                status_warn(&format!("Failed to cache resolved library paths: {err}"));
             }
             Some(paths)
         }
         Err(err) => {
-            warn!("Failed to resolve extra libraries: {err}");
+            status_warn(&format!("Failed to resolve extra libraries: {err}"));
             None
         }
     }
@@ -189,18 +199,9 @@ fn is_musl_python(python_dir: &Path) -> bool {
 /// `python_dir` is the installation directory (e.g., `cpython-3.12.13-linux-x86_64-gnu/`)
 /// containing `bin/`, `lib/`, etc.
 ///
-/// Builds a patched copy in `/nix/store/` via a Nix derivation, then creates
-/// a mirror directory with writable dirs and file-level symlinks to the store.
-/// The `.nix` sibling is a reference symlink to the derivation output.
+/// Uses nix to resolve library paths and patchelf/install_name_tool, then patches
+/// ELF/Mach-O binaries in place and installs the ctypes hook.
 pub fn post_python_install_patch(python_dir: &Path) {
-    // Skip if already patched (has a .nix sibling)
-    let nix_ref = python_dir.with_file_name(
-        format!("{}.nix", python_dir.file_name().unwrap_or_default().to_string_lossy()),
-    );
-    if nix_ref.exists() {
-        return;
-    }
-
     // Skip musl-linked Python — our glibc paths would break it
     if is_musl_python(python_dir) {
         debug!(
@@ -213,12 +214,7 @@ pub fn post_python_install_patch(python_dir: &Path) {
     // Nix is required — require() exits with error if not available
     let _nix = nix_config::require();
 
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let project_dir = nix_config::find_project_root(&cwd).unwrap_or(cwd);
-    let uv_nix_cfg = config::find_config(&project_dir)
-        .map(|(c, _)| c)
-        .unwrap_or_default();
-    let source = nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_cfg);
+    let config = patchelf::PatchConfig::from_env();
 
     let python_name = python_dir
         .file_name()
@@ -226,117 +222,14 @@ pub fn post_python_install_patch(python_dir: &Path) {
         .to_string_lossy();
     status("Patching", &format!("{python_name} (nix)"));
 
-    match nix_build::nix_patch_python(python_dir, &source) {
-        Ok(store_path) => {
-            // Create .nix reference symlink to the derivation
-            if let Err(err) = symlink(&store_path, &nix_ref) {
-                warn!("Failed to create .nix reference symlink: {err}");
-                return;
-            }
-
-            // Replace the original directory with a mirror: writable dirs,
-            // file-level symlinks to the nix store output.
-            if let Err(err) = mirror_nix_store_output(python_dir, &store_path) {
-                warn!("Failed to create mirror directory: {err}");
-                return;
-            }
-
-            status("Patched", &format!("{python_name} -> {}", store_path.display()));
-        }
-        Err(err) => {
-            warn!("Nix patching failed, trying patchelf fallback: {err}");
-            fallback_patchelf_patch(python_dir);
-        }
-    }
-}
-
-/// Replace `python_dir` with a mirror directory: writable directory structure
-/// with file-level symlinks to the nix store output.
-///
-/// This allows uv to write files (like EXTERNALLY-MANAGED) into the Python
-/// installation while keeping patched binaries as immutable nix store references.
-fn mirror_nix_store_output(python_dir: &Path, store_path: &Path) -> anyhow::Result<()> {
-    // Remove the original directory
-    fs::remove_dir_all(python_dir)?;
-
-    // Recreate as a mirror with file-level symlinks
-    fs::create_dir_all(python_dir)?;
-    for entry in walkdir::WalkDir::new(store_path) {
-        let entry = entry?;
-        let rel = entry.path().strip_prefix(store_path)?;
-        if rel.as_os_str().is_empty() {
-            continue;
-        }
-        let target = python_dir.join(rel);
-        if entry.file_type().is_dir() {
-            fs::create_dir_all(&target)?;
-        } else {
-            // Symlink individual files to the nix store
-            symlink(entry.path(), &target)?;
-        }
-    }
-    Ok(())
-}
-
-/// Fallback: copy-then-patch with patchelf.
-fn fallback_patchelf_patch(python_dir: &Path) {
-    let config = patchelf::PatchConfig::from_env();
-    let patched_dir = python_dir.with_file_name(
-        format!("{}.nix", python_dir.file_name().unwrap_or_default().to_string_lossy()),
-    );
-
-    if patched_dir.exists() {
-        if let Err(err) = fs::remove_dir_all(&patched_dir) {
-            warn!("Failed to remove stale patched dir: {err}");
-            return;
-        }
-    }
-
-    status("Copying", "Python installation for patching");
-    if let Err(err) = copy_dir_recursive(python_dir, &patched_dir) {
-        warn!("Failed to copy Python installation: {err}");
-        let _ = fs::remove_dir_all(&patched_dir);
+    if let Err(err) = patchelf::patch_directory(python_dir, &config) {
+        status_warn(&format!("Failed to patch ELF binaries: {err}"));
         return;
     }
 
-    status("Patching", "ELF binaries (patchelf fallback)");
-    if let Err(err) = patchelf::patch_directory(&patched_dir, &config) {
-        warn!("Failed to patch Python installation: {err}");
-        let _ = fs::remove_dir_all(&patched_dir);
-        return;
-    }
+    ctypes_hook::install_hook_for_python(python_dir, &config.rpath);
 
-    ctypes_hook::install_hook_for_python(&patched_dir, &config.rpath);
-
-    // Replace original with mirror from patched copy
-    if let Err(err) = fs::remove_dir_all(python_dir) {
-        warn!("Failed to remove original python dir: {err}");
-        return;
-    }
-    if let Err(err) = fs::rename(&patched_dir, python_dir) {
-        warn!("Failed to move patched dir: {err}");
-    }
-}
-
-/// Recursively copy a directory and its contents, preserving permissions.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in walkdir::WalkDir::new(src) {
-        let entry = entry?;
-        let rel = entry.path().strip_prefix(src)?;
-        let target = dst.join(rel);
-        if entry.file_type().is_dir() {
-            fs::create_dir_all(&target)?;
-        } else if entry.file_type().is_symlink() {
-            let link_target = fs::read_link(entry.path())?;
-            // Remove existing file if somehow present
-            let _ = fs::remove_file(&target);
-            symlink(&link_target, &target)?;
-        } else {
-            fs::copy(entry.path(), &target)?;
-        }
-    }
-    Ok(())
+    status("Patched", &format!("{python_name}"));
 }
 
 /// Handler for `uv nix patch-env` — manually patch a virtual environment.

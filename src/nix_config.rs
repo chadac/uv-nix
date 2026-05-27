@@ -360,11 +360,14 @@ in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
 
     debug!("Building NixConfig via nix build (darwin={})", darwin);
 
-    let output = crate::nix_command()
-        .arg("build")
+    let mut cmd = crate::nix_command();
+    cmd.arg("build")
         .arg("--no-link")
-        .arg("--print-out-paths")
-        .arg("--impure")
+        .arg("--print-out-paths");
+    if nixpkgs::requires_impure(source) {
+        cmd.arg("--impure");
+    }
+    let output = cmd
         .arg("--expr")
         .arg(&expr)
         .output()?;
