@@ -1,11 +1,15 @@
 # default.nix
-# Core build logic for uv-nix from source
+# Core build logic for uv-nix from source using crane
+#
+# Crane splits the build into two derivations:
+# 1. cargoArtifacts (dependencies only) - cached when Cargo.lock unchanged
+# 2. final binary - fast rebuild when only source changes
 #
 # Usage:
-#   uv = pkgs.callPackage ./. {};
+#   uv = pkgs.callPackage ./. { craneLib = crane.mkLib pkgs; };
 { lib
 , stdenv
-, rustPlatform
+, craneLib
 , installShellFiles
 , rust-jemalloc-sys
 , fetchFromGitHub
@@ -58,35 +62,42 @@ let
       "${uvNixSrc}/patches/04-uv-dispatch-nix-build-env.patch"
     ];
 
+    # Replace uv's Cargo.lock with the pre-generated one that includes uv-nix.
+    # Updated via `just update-lockfile` after applying patches.
+    postPatch = ''
+      cp ${uvNixSrc}/data/Cargo.lock Cargo.lock
+    '';
+
     installPhase = ''
       cp -r . $out
     '';
   };
 
-in rustPlatform.buildRustPackage {
-  pname = "uv";
-  version = "${uvMeta.version}-nix";
+  commonArgs = {
+    pname = "uv";
+    version = "${uvMeta.version}-nix";
+    src = patchedSrc;
+    strictDeps = true;
 
-  src = patchedSrc;
+    buildInputs = [
+      rust-jemalloc-sys
+    ];
 
-  cargoLock = {
-    lockFile = "${patchedSrc}/Cargo.lock";
+    nativeBuildInputs = [
+      installShellFiles
+    ];
+
+    inherit doCheck;
   };
 
-  buildInputs = [
-    rust-jemalloc-sys
-  ];
+  # Build dependencies only — cached as long as Cargo.lock doesn't change.
+  # This is the expensive step (compiles uv-dispatch, etc.) but only runs once.
+  cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-  nativeBuildInputs = [
-    installShellFiles
-  ];
+in craneLib.buildPackage (commonArgs // {
+  inherit cargoArtifacts;
 
-  cargoBuildFlags = [
-    "--package"
-    "uv"
-  ];
-
-  inherit doCheck;
+  cargoExtraArgs = "--locked --package uv";
 
   meta = with lib; {
     description = "uv Python package manager with Nix integration";
@@ -94,4 +105,4 @@ in rustPlatform.buildRustPackage {
     license = with licenses; [ asl20 mit ];
     mainProgram = "uv";
   };
-}
+})

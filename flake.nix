@@ -5,19 +5,20 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     systems.url = "github:nix-systems/default";
+    crane.url = "github:ipetkov/crane";
     cached-exec = {
       url = "github:chadac/cached-exec";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, flake-parts, nixpkgs, systems, cached-exec, ... }@inputs:
+  outputs = { self, flake-parts, nixpkgs, systems, crane, cached-exec, ... }@inputs:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = import systems;
 
       perSystem = { pkgs, system, lib, ... }:
         let
-          package = pkgs.callPackage ./. {};
+          package = pkgs.callPackage ./. { craneLib = crane.mkLib pkgs; };
           binaries = import ./nix/uv-nix-binaries.nix { inherit pkgs; };
         in {
           packages = {

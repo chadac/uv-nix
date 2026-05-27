@@ -61,8 +61,7 @@ for patch in "$PROJECT_DIR/patches/"*.patch; do
     git apply "$patch"
 done
 
-echo "==> Updating Cargo.lock..."
-cargo generate-lockfile 2>/dev/null || cargo update -w
+bash "$SCRIPT_DIR/update-lockfile.sh"
 
 touch "$STAMP_FILE"
 echo "==> Done."

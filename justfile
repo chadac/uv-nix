@@ -26,6 +26,10 @@ build-force:
         -- \
         cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
 
+# Update data/Cargo.lock from the patched uv workspace
+update-lockfile: build
+    bash scripts/update-lockfile.sh
+
 # Full nix build (produces self-contained binary)
 nix-build:
     nix build

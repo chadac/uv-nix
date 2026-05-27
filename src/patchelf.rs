@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use rayon::prelude::*;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
 
@@ -312,10 +313,10 @@ pub fn patch_directory(dir: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         binary_type,
         dir.display()
     );
-    for binary in &binaries {
+    binaries.par_iter().for_each(|binary| {
         if let Err(err) = patch_binary(binary, config) {
             warn!("Failed to patch {}: {err}", binary.display());
         }
-    }
+    });
     Ok(())
 }
