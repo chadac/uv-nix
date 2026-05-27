@@ -153,8 +153,10 @@ pub fn post_install_patch(site_packages: &Path) {
         }
     }
 
-    status("Patching", &format!("ELF binaries in {}", site_packages.display()));
-
+    debug!(
+        "Patching ELF binaries in site-packages: {}",
+        site_packages.display()
+    );
     if let Err(err) = patchelf::patch_directory(site_packages, &patch_config) {
         status_warn(&format!("Failed to patch site-packages: {err}"));
     }

@@ -109,25 +109,24 @@ fn test_package_impl(package: &str, import_check: &str, no_binary: bool, require
         }
     }
 
-    // Build install command
+    // Build install command (use -v for debug output in CI)
     let mut install = Command::new(UV_BIN.as_path());
-    install.args(["pip", "install", "--python", python.to_str().unwrap()]);
+    install.args(["pip", "install", "-v", "--python", python.to_str().unwrap()]);
     if no_binary {
         install.args(["--no-binary", package]);
     }
     install.arg(package);
 
     let install_out = install.output().expect("install command failed to execute");
+    let install_stderr = String::from_utf8_lossy(&install_out.stderr).to_string();
+
     if !install_out.status.success() {
         return TestResult {
             success: false,
             skipped: false,
             skip_reason: None,
             stdout: String::from_utf8_lossy(&install_out.stdout).to_string(),
-            stderr: format!(
-                "Install failed:\n{}",
-                String::from_utf8_lossy(&install_out.stderr)
-            ),
+            stderr: format!("Install failed:\n{install_stderr}"),
         };
     }
 
@@ -137,11 +136,22 @@ fn test_package_impl(package: &str, import_check: &str, no_binary: bool, require
         .output()
         .expect("python check command failed to execute");
 
+    let check_stdout = String::from_utf8_lossy(&check.stdout).to_string();
+    let check_stderr = String::from_utf8_lossy(&check.stderr).to_string();
+
     TestResult {
         success: check.status.success(),
         skipped: false,
         skip_reason: None,
-        stdout: String::from_utf8_lossy(&check.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&check.stderr).to_string(),
+        stdout: check_stdout,
+        stderr: if check.status.success() {
+            check_stderr
+        } else {
+            // Include install output for debugging when import fails
+            format!(
+                "Import failed (exit code {}):\n{check_stderr}\n\n--- install output ---\n{install_stderr}",
+                check.status.code().unwrap_or(-1)
+            )
+        },
     }
 }
