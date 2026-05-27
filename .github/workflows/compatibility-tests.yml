@@ -37,6 +37,9 @@ jobs:
 
       - uses: cachix/install-nix-action@v31
 
+      - name: Prepare workspace
+        run: mkdir -p uv
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "uv -> target"
@@ -62,6 +65,9 @@ jobs:
       - uses: actions/checkout@v6
 
       - uses: cachix/install-nix-action@v31
+
+      - name: Prepare workspace
+        run: mkdir -p uv
 
       - uses: Swatinem/rust-cache@v2
         with:
