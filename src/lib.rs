@@ -144,15 +144,21 @@ fn timing_enabled() -> bool {
     std::env::var("UV_NIX_TIMING").map_or(false, |v| v == "1")
 }
 
-/// Called automatically after wheel installs to patch `.so` files for NixOS compatibility.
+/// Called automatically after wheel installs to patch native binaries for Nix compatibility.
 ///
-/// Patches all native binaries in site-packages, skipping those that have already
-/// been patched (detected by checking if the RPATH already contains `/nix/store`).
+/// Only patches binaries belonging to the packages that were just installed (identified
+/// by their dist-info prefixes, e.g. `["numpy-2.4.6", "pandas-2.3.0"]`). This ensures
+/// each binary is patched exactly once from a pristine state — no accumulated rpaths.
 ///
 /// When `UV_NIX_TIMING=1` is set, emits a structured timing line to stderr:
 /// `uv-nix-timing: nix_resolve=Xms find_binaries=Xms (N files) patch=Xms total=Xms`
-pub fn post_install_patch(site_packages: &Path) {
+pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
     use std::time::Instant;
+
+    if installed_packages.is_empty() {
+        return;
+    }
+
     let timing = timing_enabled();
     let t_total = Instant::now();
 
@@ -168,19 +174,35 @@ pub fn post_install_patch(site_packages: &Path) {
     }
     let nix_resolve_ms = t0.elapsed().as_millis();
 
-    // Stage 2: Find native binaries
+    // Stage 2: Find native binaries from RECORD files of installed packages
     let t1 = Instant::now();
-    let binaries = patchelf::find_native_binaries(site_packages, patch_config.is_darwin);
+    let binaries = collect_native_binaries_from_records(
+        site_packages,
+        installed_packages,
+        patch_config.is_darwin,
+    );
     let find_ms = t1.elapsed().as_millis();
     let n_binaries = binaries.len();
 
+    if n_binaries == 0 {
+        if timing {
+            let total_ms = t_total.elapsed().as_millis();
+            eprintln!(
+                "uv-nix-timing: nix_resolve={}ms find_binaries={}ms (0 files) patch=0ms total={}ms",
+                nix_resolve_ms, find_ms, total_ms
+            );
+        }
+        return;
+    }
+
     debug!(
-        "Patching {} binaries in site-packages: {}",
+        "Patching {} binaries from {} packages in {}",
         n_binaries,
+        installed_packages.len(),
         site_packages.display()
     );
 
-    // Stage 3: Patch binaries
+    // Stage 3: Patch binaries (these are fresh from cache — guaranteed unpatched)
     let t2 = Instant::now();
     patchelf::patch_binaries(&binaries, &patch_config);
     let patch_ms = t2.elapsed().as_millis();
@@ -193,6 +215,74 @@ pub fn post_install_patch(site_packages: &Path) {
             nix_resolve_ms, find_ms, n_binaries, patch_ms, total_ms
         );
     }
+}
+
+/// Collect native binary paths from RECORD files of the given installed packages.
+///
+/// For each dist-info prefix (e.g. "numpy-2.4.6"), reads its RECORD file and
+/// filters entries to native binaries (.so, .dylib, extensionless ELF/Mach-O).
+fn collect_native_binaries_from_records(
+    site_packages: &Path,
+    installed_packages: &[String],
+    is_darwin: bool,
+) -> Vec<PathBuf> {
+    let mut binaries = Vec::new();
+
+    for dist_prefix in installed_packages {
+        let record_path = site_packages
+            .join(format!("{dist_prefix}.dist-info"))
+            .join("RECORD");
+
+        let content = match fs::read_to_string(&record_path) {
+            Ok(c) => c,
+            Err(err) => {
+                debug!("Could not read RECORD for {dist_prefix}: {err}");
+                continue;
+            }
+        };
+
+        for line in content.lines() {
+            // RECORD format: relative_path,hash,size
+            let rel_path = match line.split(',').next() {
+                Some(p) if !p.is_empty() => p,
+                _ => continue,
+            };
+
+            // Skip dist-info entries themselves
+            if rel_path.contains(".dist-info/") {
+                continue;
+            }
+
+            let abs_path = site_packages.join(rel_path);
+
+            // Check if this looks like a native binary
+            if !abs_path.is_file() {
+                continue;
+            }
+
+            let name = match abs_path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            if is_darwin {
+                let is_dylib = name.contains(".dylib");
+                let is_so = name.contains(".so");
+                let is_extensionless = !name.contains('.');
+                if (is_dylib || is_so || is_extensionless) && patchelf::is_native_binary(&abs_path, true) {
+                    binaries.push(abs_path);
+                }
+            } else {
+                let is_so = name.contains(".so");
+                let is_extensionless = !name.contains('.');
+                if (is_so || is_extensionless) && patchelf::is_native_binary(&abs_path, false) {
+                    binaries.push(abs_path);
+                }
+            }
+        }
+    }
+
+    binaries
 }
 
 /// Resolve extra library paths from `[tool.uv-nix]` in pyproject.toml.
