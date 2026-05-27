@@ -277,10 +277,27 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Check existing rpaths to skip already-patched binaries.
+    // Use otool -l to read LC_RPATH entries; if any point to /nix/store, skip.
+    let existing_output = Command::new("otool")
+        .arg("-l")
+        .arg(path)
+        .output()
+        .ok();
+    if let Some(ref out) = existing_output {
+        if out.status.success() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if stdout.contains("/nix/store") {
+                debug!("Already patched, skipping: {}", path.display());
+                return Ok(());
+            }
+        }
+    }
+
     // Add each rpath entry using install_name_tool -add_rpath
     for rpath_entry in &config.rpath {
         let rpath_str = rpath_entry.to_string_lossy();
-        
+
         let mut cmd = Command::new(&config.patcher);
         cmd.arg("-add_rpath").arg(rpath_str.as_ref()).arg(path);
         debug!("Running: {:?}", cmd);

@@ -99,6 +99,17 @@ test-pkg PKG: build
 test-seq: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --test-threads=1
 
+# Run install benchmarks (isolated venvs, sequential)
+bench: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BENCH_OUTPUT="${BENCH_OUTPUT:-/tmp/uv-nix-bench/results.md}"
+    mkdir -p "$(dirname "$BENCH_OUTPUT")"
+    UV_BIN="$(pwd)/uv/target/debug/uv" BENCH_OUTPUT="$BENCH_OUTPUT" \
+        cargo test --test bench_install -- --test-threads=1 --nocapture
+    echo "Results: $BENCH_OUTPUT"
+    cat "$BENCH_OUTPUT"
+
 # Run all test suites
 test-all: test-wheel test-source test-patch test-docker
 
