@@ -239,6 +239,29 @@ const BENCH_PACKAGES: &[(&str, &str)] = &[
 
 #[test]
 fn bench_installs() {
+    // Warmup: create and destroy a venv to trigger Python download + nix config
+    // resolution so the first real benchmark isn't unfairly penalized.
+    {
+        eprintln!("Warming up (nix config + Python download)...");
+        let warmup_dir = std::env::temp_dir().join("uv-nix-bench").join("warmup");
+        let _ = std::fs::remove_dir_all(&warmup_dir);
+        let _ = Command::new(UV_BIN.as_path())
+            .args(["venv", warmup_dir.to_str().unwrap()])
+            .output();
+        // Run a trivial install to trigger nix config resolution + cache
+        if warmup_dir.join("bin/python").exists() {
+            let _ = Command::new(UV_BIN.as_path())
+                .args([
+                    "pip", "install",
+                    "--python", warmup_dir.join("bin/python").to_str().unwrap(),
+                    "pip",
+                ])
+                .output();
+        }
+        let _ = std::fs::remove_dir_all(&warmup_dir);
+        eprintln!("Warmup done.");
+    }
+
     let results: Vec<BenchResult> = BENCH_PACKAGES
         .iter()
         .map(|(pkg, check)| {
