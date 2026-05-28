@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 use walkdir::WalkDir;
 
 /// Configuration for patching native binaries.
-/// 
+///
 /// On Linux, uses `patchelf` for ELF binaries.
 /// On Darwin, uses `install_name_tool` for Mach-O binaries.
 pub struct PatchConfig {
@@ -54,7 +54,11 @@ impl PatchConfig {
     ) -> Self {
         let base = Self::from_env();
         let patcher_path = patchelf.unwrap_or(base.patcher);
-        let interp = if base.is_darwin { None } else { interpreter.or(base.interpreter) };
+        let interp = if base.is_darwin {
+            None
+        } else {
+            interpreter.or(base.interpreter)
+        };
         let rpath_entries = rpath
             .filter(|s| !s.is_empty())
             .map(|s| s.split(':').map(PathBuf::from).collect())
@@ -66,7 +70,7 @@ impl PatchConfig {
             is_darwin: base.is_darwin,
         }
     }
-    
+
     /// Legacy accessor for backwards compatibility.
     pub fn patchelf(&self) -> &PathBuf {
         &self.patcher
@@ -86,7 +90,7 @@ fn is_elf(path: &Path) -> bool {
 }
 
 /// Check if a file is a Mach-O binary (macOS).
-/// 
+///
 /// Mach-O files start with one of:
 /// - 0xFEEDFACE (32-bit)
 /// - 0xFEEDFACF (64-bit)
@@ -107,7 +111,7 @@ fn is_macho(path: &Path) -> bool {
         [0xFE, 0xED, 0xFA, 0xCF] |  // MH_MAGIC_64 (64-bit BE)
         [0xCF, 0xFA, 0xED, 0xFE] |  // MH_CIGAM_64 (64-bit LE)
         [0xCA, 0xFE, 0xBA, 0xBE] |  // FAT_MAGIC (universal BE)
-        [0xBE, 0xBA, 0xFE, 0xCA]    // FAT_CIGAM (universal LE)
+        [0xBE, 0xBA, 0xFE, 0xCA] // FAT_CIGAM (universal LE)
     )
 }
 
@@ -263,7 +267,10 @@ fn patch_elf_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let msg = stderr.trim();
             if msg.contains("cannot find section '.interp'") {
-                debug!("Skipping --set-interpreter on shared library: {}", path.display());
+                debug!(
+                    "Skipping --set-interpreter on shared library: {}",
+                    path.display()
+                );
             } else {
                 anyhow::bail!(
                     "patchelf --set-interpreter failed on {}: {}",
@@ -288,18 +295,14 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
 
     // Check existing rpaths to skip already-patched binaries.
     // Use otool -l to read LC_RPATH entries; if any point to /nix/store, skip.
-    let existing_output = Command::new("otool")
-        .arg("-l")
-        .arg(path)
-        .output()
-        .ok();
-    if let Some(ref out) = existing_output {
-        if out.status.success() {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            if stdout.contains("/nix/store") {
-                debug!("Already patched, skipping: {}", path.display());
-                return Ok(());
-            }
+    let existing_output = Command::new("otool").arg("-l").arg(path).output().ok();
+    if let Some(ref out) = existing_output
+        && out.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if stdout.contains("/nix/store") {
+            debug!("Already patched, skipping: {}", path.display());
+            return Ok(());
         }
     }
 
@@ -319,7 +322,10 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         let msg = stderr.trim();
         // "would duplicate path" means some rpaths already exist, which is fine
         if msg.contains("would duplicate path") {
-            debug!("Some rpaths already exist in {}, adding individually", path.display());
+            debug!(
+                "Some rpaths already exist in {}, adding individually",
+                path.display()
+            );
             // Fall back to one-at-a-time to skip duplicates
             for rpath_entry in &config.rpath {
                 let mut single = Command::new(&config.patcher);

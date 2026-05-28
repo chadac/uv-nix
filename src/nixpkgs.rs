@@ -4,7 +4,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::config::{UvNixConfig, UseSource};
+use crate::config::{UseSource, UvNixConfig};
 
 /// Describes how nixpkgs was resolved.
 #[derive(Debug, Clone)]
@@ -194,7 +194,10 @@ fn auto_resolve_nixpkgs(project_dir: &Path) -> Option<String> {
         ),
         true,
     ) {
-        crate::status("Skipped", "flake generation, resolving nixpkgs-unstable via git");
+        crate::status(
+            "Skipped",
+            "flake generation, resolving nixpkgs-unstable via git",
+        );
         return resolve_latest_nixpkgs_rev();
     }
 
@@ -292,13 +295,19 @@ fn write_nixpkgs_pin(pyproject_path: &Path, rev: &str) -> anyhow::Result<()> {
     let pin_value = format!("github:NixOS/nixpkgs/{rev}");
 
     // Navigate to tool.uv-nix, creating sections as needed
-    let tool = doc.entry("tool").or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
-    let tool_table = tool.as_table_mut()
+    let tool = doc
+        .entry("tool")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+    let tool_table = tool
+        .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[tool] is not a table"))?;
     tool_table.set_implicit(true);
 
-    let uv_nix = tool_table.entry("uv-nix").or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
-    let uv_nix_table = uv_nix.as_table_mut()
+    let uv_nix = tool_table
+        .entry("uv-nix")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+    let uv_nix_table = uv_nix
+        .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[tool.uv-nix] is not a table"))?;
 
     // Don't overwrite an existing pin
@@ -330,9 +339,7 @@ pub fn nixpkgs_import_expr(source: &NixpkgsSource) -> String {
             )
         }
         NixpkgsSource::ExplicitPin { flake_ref } => {
-            format!(
-                "(builtins.getFlake \"{flake_ref}\").legacyPackages.\"{system}\""
-            )
+            format!("(builtins.getFlake \"{flake_ref}\").legacyPackages.\"{system}\"")
         }
     }
 }
@@ -382,9 +389,7 @@ pub fn resolve_build_paths(
     let attr_exprs: Vec<String> = attrs
         .iter()
         .map(|attr| {
-            format!(
-                "(pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)"
-            )
+            format!("(pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)")
         })
         .collect();
 
@@ -406,16 +411,11 @@ pub fn resolve_build_paths(
     debug!("Building nix expression for build paths");
 
     let mut cmd = crate::nix_command();
-    cmd.arg("build")
-        .arg("--no-link")
-        .arg("--print-out-paths");
+    cmd.arg("build").arg("--no-link").arg("--print-out-paths");
     if requires_impure(source) {
         cmd.arg("--impure");
     }
-    let output = cmd
-        .arg("--expr")
-        .arg(&expr)
-        .output()?;
+    let output = cmd.arg("--expr").arg(&expr).output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -446,10 +446,7 @@ pub fn resolve_build_paths(
 
 /// Resolve a list of nixpkgs attr paths to a colon-separated library path string
 /// using `nix eval`.
-pub fn resolve_library_paths(
-    attrs: &[String],
-    source: &NixpkgsSource,
-) -> anyhow::Result<String> {
+pub fn resolve_library_paths(attrs: &[String], source: &NixpkgsSource) -> anyhow::Result<String> {
     if attrs.is_empty() {
         return Ok(String::new());
     }
@@ -460,9 +457,7 @@ pub fn resolve_library_paths(
     let attr_exprs: Vec<String> = attrs
         .iter()
         .map(|attr| {
-            format!(
-                "(pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)"
-            )
+            format!("(pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)")
         })
         .collect();
 
@@ -474,15 +469,11 @@ pub fn resolve_library_paths(
     debug!("Evaluating nix expression for extra libraries");
 
     let mut cmd = crate::nix_command();
-    cmd.arg("eval")
-        .arg("--raw");
+    cmd.arg("eval").arg("--raw");
     if requires_impure(source) {
         cmd.arg("--impure");
     }
-    let output = cmd
-        .arg("--expr")
-        .arg(&expr)
-        .output()?;
+    let output = cmd.arg("--expr").arg(&expr).output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -551,9 +542,7 @@ fn resolve_input_key(
         serde_json::Value::String(s) => Some(s.clone()),
         serde_json::Value::Array(arr) => {
             // `follows` format: ["some", "path"] — use the last component
-            arr.last()
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+            arr.last().and_then(|v| v.as_str()).map(|s| s.to_string())
         }
         _ => None,
     }
@@ -574,49 +563,43 @@ fn parse_devenv_lock(lock_path: &Path) -> Option<String> {
     let root_node = lock.nodes.get(&lock.root)?;
     let root_inputs = root_node.inputs.as_ref()?;
 
-    if let Some(nixpkgs_key) = resolve_input_key(root_inputs, "nixpkgs") {
-        if let Some(nixpkgs_node) = lock.nodes.get(&nixpkgs_key) {
-            if let Some(locked) = &nixpkgs_node.locked {
-                // Direct NixOS/nixpkgs
-                if locked.owner.as_deref() == Some("NixOS")
-                    && locked.repo.as_deref() == Some("nixpkgs")
-                {
-                    return locked.rev.clone();
-                }
+    if let Some(nixpkgs_key) = resolve_input_key(root_inputs, "nixpkgs")
+        && let Some(nixpkgs_node) = lock.nodes.get(&nixpkgs_key)
+        && let Some(locked) = &nixpkgs_node.locked
+    {
+        // Direct NixOS/nixpkgs
+        if locked.owner.as_deref() == Some("NixOS") && locked.repo.as_deref() == Some("nixpkgs") {
+            return locked.rev.clone();
+        }
 
-                // cachix/devenv-nixpkgs wrapper — follow sub-inputs
-                if locked.repo.as_deref() == Some("devenv-nixpkgs") {
-                    if let Some(sub_inputs) = &nixpkgs_node.inputs {
-                        // Look for a sub-input pointing to NixOS/nixpkgs
-                        for (_name, value) in sub_inputs {
-                            let sub_key = match value {
-                                serde_json::Value::String(s) => s.clone(),
-                                _ => continue,
-                            };
-                            if let Some(sub_node) = lock.nodes.get(&sub_key) {
-                                if let Some(sub_locked) = &sub_node.locked {
-                                    if sub_locked.owner.as_deref() == Some("NixOS")
-                                        && sub_locked.repo.as_deref() == Some("nixpkgs")
-                                    {
-                                        return sub_locked.rev.clone();
-                                    }
-                                }
-                            }
-                        }
-                    }
+        // cachix/devenv-nixpkgs wrapper — follow sub-inputs
+        if locked.repo.as_deref() == Some("devenv-nixpkgs")
+            && let Some(sub_inputs) = &nixpkgs_node.inputs
+        {
+            // Look for a sub-input pointing to NixOS/nixpkgs
+            for value in sub_inputs.values() {
+                let sub_key = match value {
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => continue,
+                };
+                if let Some(sub_node) = lock.nodes.get(&sub_key)
+                    && let Some(sub_locked) = &sub_node.locked
+                    && sub_locked.owner.as_deref() == Some("NixOS")
+                    && sub_locked.repo.as_deref() == Some("nixpkgs")
+                {
+                    return sub_locked.rev.clone();
                 }
             }
         }
     }
 
     // Fallback: scan all nodes for any NixOS/nixpkgs reference
-    for (_name, node) in &lock.nodes {
-        if let Some(locked) = &node.locked {
-            if locked.owner.as_deref() == Some("NixOS")
-                && locked.repo.as_deref() == Some("nixpkgs")
-            {
-                return locked.rev.clone();
-            }
+    for node in lock.nodes.values() {
+        if let Some(locked) = &node.locked
+            && locked.owner.as_deref() == Some("NixOS")
+            && locked.repo.as_deref() == Some("nixpkgs")
+        {
+            return locked.rev.clone();
         }
     }
 
@@ -648,10 +631,10 @@ fn parse_flox_lock(lock_path: &Path) -> Option<String> {
 
     let packages = lock.packages?;
     for pkg in &packages {
-        if let Some(ref rev) = pkg.rev {
-            if rev.len() >= 40 {
-                return Some(rev.clone());
-            }
+        if let Some(ref rev) = pkg.rev
+            && rev.len() >= 40
+        {
+            return Some(rev.clone());
         }
     }
     None
@@ -1222,14 +1205,20 @@ version = "1.0.0"
         write_nixpkgs_pin(&pyproject, "abc123def456").unwrap();
 
         let result = fs::read_to_string(&pyproject).unwrap();
-        assert!(result.contains("[tool.uv-nix]"), "missing section:\n{result}");
+        assert!(
+            result.contains("[tool.uv-nix]"),
+            "missing section:\n{result}"
+        );
         assert!(
             result.contains(r#"nixpkgs = "github:NixOS/nixpkgs/abc123def456""#),
             "missing pin:\n{result}"
         );
         // Original content preserved
         assert!(result.contains("[project]"), "lost [project]:\n{result}");
-        assert!(result.contains("my-project"), "lost project name:\n{result}");
+        assert!(
+            result.contains("my-project"),
+            "lost project name:\n{result}"
+        );
     }
 
     #[test]
@@ -1256,9 +1245,15 @@ extra-libraries = ["libGL"]
             "missing pin:\n{result}"
         );
         // Existing config preserved
-        assert!(result.contains(r#"extra-libraries = ["libGL"]"#), "lost existing config:\n{result}");
+        assert!(
+            result.contains(r#"extra-libraries = ["libGL"]"#),
+            "lost existing config:\n{result}"
+        );
         // Comment preserved
-        assert!(result.contains("# Custom nix config"), "lost comment:\n{result}");
+        assert!(
+            result.contains("# Custom nix config"),
+            "lost comment:\n{result}"
+        );
     }
 
     #[test]
@@ -1273,7 +1268,10 @@ nixpkgs = "github:NixOS/nixpkgs/existing-pin"
         write_nixpkgs_pin(&pyproject, "new-rev-should-not-appear").unwrap();
 
         let result = fs::read_to_string(&pyproject).unwrap();
-        assert!(result.contains("existing-pin"), "overwrote existing pin:\n{result}");
+        assert!(
+            result.contains("existing-pin"),
+            "overwrote existing pin:\n{result}"
+        );
         assert!(
             !result.contains("new-rev-should-not-appear"),
             "should not overwrite:\n{result}"
@@ -1283,11 +1281,15 @@ nixpkgs = "github:NixOS/nixpkgs/existing-pin"
     #[test]
     fn test_nixpkgs_cache_key() {
         assert_eq!(
-            nixpkgs_cache_key(&NixpkgsSource::FlakeLock { rev: "abc".to_string() }),
+            nixpkgs_cache_key(&NixpkgsSource::FlakeLock {
+                rev: "abc".to_string()
+            }),
             "flake-lock:abc"
         );
         assert_eq!(
-            nixpkgs_cache_key(&NixpkgsSource::FloxLock { rev: "def".to_string() }),
+            nixpkgs_cache_key(&NixpkgsSource::FloxLock {
+                rev: "def".to_string()
+            }),
             "flox-lock:def"
         );
         assert_eq!(

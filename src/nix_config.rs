@@ -76,7 +76,7 @@ static NIX_CONFIG: OnceLock<Result<NixConfig, String>> = OnceLock::new();
 
 /// Get the lazily-resolved NixConfig, or None if resolution failed.
 pub fn get() -> Option<&'static NixConfig> {
-    NIX_CONFIG.get_or_init(|| resolve_config()).as_ref().ok()
+    NIX_CONFIG.get_or_init(resolve_config).as_ref().ok()
 }
 
 /// Get the NixConfig or exit with the actual error.
@@ -84,7 +84,7 @@ pub fn get() -> Option<&'static NixConfig> {
 /// This is uv-nix: Nix is required. Every hook calls this so the user
 /// gets a clear error explaining what went wrong.
 pub fn require() -> &'static NixConfig {
-    match NIX_CONFIG.get_or_init(|| resolve_config()) {
+    match NIX_CONFIG.get_or_init(resolve_config) {
         Ok(config) => config,
         Err(msg) => {
             eprintln!("error: {msg}");
@@ -105,8 +105,8 @@ fn resolve_config() -> Result<NixConfig, String> {
         );
     }
 
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {e}"))?;
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {e}"))?;
     let project_dir = find_project_root(&cwd).unwrap_or(cwd);
 
     let uv_nix_config = crate::config::find_config(&project_dir)
@@ -191,9 +191,7 @@ fn cache_dir() -> Option<PathBuf> {
 fn dirs_or_home() -> Option<PathBuf> {
     std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
 }
 
 /// Load a cached NixConfig from `~/.cache/uv-nix/<hash>.json`.
@@ -209,7 +207,10 @@ fn load_cache(key: &str) -> Option<NixConfig> {
         return None;
     }
     // On Linux, also check interpreter exists
-    if !config.is_darwin && !config.interpreter.as_os_str().is_empty() && !config.interpreter.exists() {
+    if !config.is_darwin
+        && !config.interpreter.as_os_str().is_empty()
+        && !config.interpreter.exists()
+    {
         debug!("Cached NixConfig interpreter path no longer exists, invalidating");
         let _ = std::fs::remove_file(&path);
         return None;
@@ -231,9 +232,7 @@ fn save_cache(key: &str, config: &NixConfig) -> anyhow::Result<()> {
 
 /// Build a nix attr resolution expression for a list of attr strings.
 fn attr_resolve_expr(attr: &str) -> String {
-    format!(
-        "(pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)"
-    )
+    format!("(pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)")
 }
 
 /// Check if we're running on Darwin/macOS.
@@ -245,15 +244,15 @@ fn is_darwin() -> bool {
 ///
 /// Returns (runtime_attrs, all_lib_attrs). build-tools are excluded — they are
 /// resolved per-package on demand in build_env.rs.
-/// 
+///
 /// Library selection is platform-aware: shared libs are always included,
 /// plus linux-specific or darwin-specific libs based on the current platform.
 fn collect_all_lib_attrs() -> anyhow::Result<(Vec<String>, Vec<String>)> {
     let darwin = is_darwin();
-    
+
     // Runtime libs (platform-specific structure)
     let libs_config: DefaultLibsConfig = serde_json::from_str(DEFAULT_LIBS_JSON)?;
-    
+
     // Combine shared + platform-specific runtime libs
     let mut runtime_attrs: Vec<String> = libs_config.shared.clone();
     if darwin {
@@ -361,16 +360,11 @@ in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
     debug!("Building NixConfig via nix build (darwin={})", darwin);
 
     let mut cmd = crate::nix_command();
-    cmd.arg("build")
-        .arg("--no-link")
-        .arg("--print-out-paths");
+    cmd.arg("build").arg("--no-link").arg("--print-out-paths");
     if nixpkgs::requires_impure(source) {
         cmd.arg("--impure");
     }
-    let output = cmd
-        .arg("--expr")
-        .arg(&expr)
-        .output()?;
+    let output = cmd.arg("--expr").arg(&expr).output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -416,7 +410,11 @@ mod tests {
     #[test]
     fn test_find_project_root_with_pyproject() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("pyproject.toml"), "[project]\nname = \"test\"").unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname = \"test\"",
+        )
+        .unwrap();
 
         let root = find_project_root(dir.path()).unwrap();
         assert_eq!(root, dir.path());

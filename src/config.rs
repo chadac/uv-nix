@@ -79,7 +79,9 @@ impl<'de> Deserialize<'de> for LibrarySpec {
 
         match LibrarySpecHelper::deserialize(deserializer)? {
             LibrarySpecHelper::Simple(pkg) => Ok(LibrarySpec::all_platforms(pkg)),
-            LibrarySpecHelper::Full { pkg, platforms } => Ok(LibrarySpec::with_platforms(pkg, platforms)),
+            LibrarySpecHelper::Full { pkg, platforms } => {
+                Ok(LibrarySpec::with_platforms(pkg, platforms))
+            }
         }
     }
 }
@@ -292,14 +294,11 @@ pub fn find_config(start: &Path) -> Option<(UvNixConfig, PathBuf)> {
 
     loop {
         let candidate = dir.join("pyproject.toml");
-        if candidate.is_file() {
-            if let Some(config) = try_parse_config(&candidate) {
-                debug!(
-                    "Found [tool.uv-nix] in {}",
-                    candidate.display()
-                );
-                return Some((config, dir));
-            }
+        if candidate.is_file()
+            && let Some(config) = try_parse_config(&candidate)
+        {
+            debug!("Found [tool.uv-nix] in {}", candidate.display());
+            return Some((config, dir));
         }
         if !dir.pop() {
             break;
@@ -344,7 +343,11 @@ extra-libraries = ["libGL", "cudaPackages.cudatoolkit"]
         .unwrap();
 
         let (config, project_dir) = find_config(dir.path()).unwrap();
-        let lib_pkgs: Vec<&str> = config.extra_libraries.iter().map(|l| l.pkg.as_str()).collect();
+        let lib_pkgs: Vec<&str> = config
+            .extra_libraries
+            .iter()
+            .map(|l| l.pkg.as_str())
+            .collect();
         assert_eq!(lib_pkgs, vec!["libGL", "cudaPackages.cudatoolkit"]);
         assert!(config.nixpkgs.is_none());
         assert_eq!(project_dir, dir.path());
@@ -431,7 +434,10 @@ extra-linux-libraries = ["cuda"]
         assert_eq!(config.packages.len(), 2);
 
         let psycopg2 = config.get_package_config("psycopg2").unwrap();
-        assert_eq!(psycopg2.nixpkgs.as_deref(), Some("github:NixOS/nixpkgs/my-custom-pin"));
+        assert_eq!(
+            psycopg2.nixpkgs.as_deref(),
+            Some("github:NixOS/nixpkgs/my-custom-pin")
+        );
         assert_eq!(psycopg2.libraries, vec!["postgresql_17"]);
         assert_eq!(psycopg2.extra_build_tools, vec!["gcc"]);
         assert!(psycopg2.has_overrides());

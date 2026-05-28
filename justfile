@@ -1,3 +1,7 @@
+# Set up git hooks (run once after cloning)
+setup:
+    git config core.hooksPath .githooks
+
 # Build the patched uv binary using cargo (fast, for development)
 build:
     bash scripts/apply-patches.sh
@@ -53,6 +57,15 @@ update-lockfile: build
 # Full nix build (produces self-contained binary)
 nix-build:
     nix build
+
+# Run formatting and lint checks (used by pre-commit hook)
+lint:
+    cargo fmt -- --check
+    cargo clippy --all-targets -- -D warnings
+
+# Auto-format code
+fmt:
+    cargo fmt
 
 # Check local Rust crate compiles
 check:
