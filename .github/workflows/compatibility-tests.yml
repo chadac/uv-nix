@@ -10,7 +10,7 @@ on:
     inputs:
       test_scope:
         description: 'Test scope'
-        required: true
+        required: false
         default: 'core'
         type: choice
         options:
@@ -18,18 +18,42 @@ on:
           - all
       platforms:
         description: 'Platforms to test'
-        required: true
+        required: false
         default: 'all'
         type: choice
         options:
           - all
           - ubuntu-only
           - macos-only
+      commit_sha:
+        description: 'PR commit SHA to report check status to (leave empty for manual runs)'
+        required: false
+        type: string
 
 permissions:
   pull-requests: write
+  checks: write
+  statuses: write
 
 jobs:
+  # When triggered via workflow_dispatch with a commit_sha, create a check run
+  # on the PR so the status is visible before tests finish.
+  create-check:
+    if: inputs.commit_sha != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create in-progress check run
+        run: |
+          gh api repos/${{ github.repository }}/check-runs \
+            -f name="Compatibility Tests" \
+            -f head_sha="${{ inputs.commit_sha }}" \
+            -f status="in_progress" \
+            -f "output[title]=Compatibility Tests" \
+            -f "output[summary]=Tests are running on the upgrade branch." \
+            -f "details_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   test-ubuntu:
     if: >-
       github.event_name != 'workflow_dispatch' ||
@@ -200,3 +224,48 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body-path: /tmp/comment-body.md
           edit-mode: replace
+
+  # Report check status back to the PR commit when triggered by check-uv-release.
+  report-check:
+    if: always() && inputs.commit_sha != ''
+    needs: [test-ubuntu, test-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine result
+        id: result
+        run: |
+          if [ "${{ needs.test-ubuntu.result }}" = "success" ] && [ "${{ needs.test-macos.result }}" = "success" ]; then
+            echo "conclusion=success" >> $GITHUB_OUTPUT
+            echo "summary=All compatibility tests passed." >> $GITHUB_OUTPUT
+          else
+            echo "conclusion=failure" >> $GITHUB_OUTPUT
+            echo "summary=Some tests failed. Ubuntu: ${{ needs.test-ubuntu.result }}, macOS: ${{ needs.test-macos.result }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update check run
+        run: |
+          # Find the check run we created earlier
+          CHECK_RUN_ID=$(gh api "repos/${{ github.repository }}/commits/${{ inputs.commit_sha }}/check-runs" \
+            --jq '.check_runs[] | select(.name == "Compatibility Tests") | .id' | head -1)
+
+          if [ -n "$CHECK_RUN_ID" ]; then
+            gh api "repos/${{ github.repository }}/check-runs/${CHECK_RUN_ID}" \
+              -X PATCH \
+              -f status="completed" \
+              -f conclusion="${{ steps.result.outputs.conclusion }}" \
+              -f "output[title]=Compatibility Tests" \
+              -f "output[summary]=${{ steps.result.outputs.summary }}" \
+              -f "details_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            # Fallback: create a new completed check run
+            gh api "repos/${{ github.repository }}/check-runs" \
+              -f name="Compatibility Tests" \
+              -f head_sha="${{ inputs.commit_sha }}" \
+              -f status="completed" \
+              -f conclusion="${{ steps.result.outputs.conclusion }}" \
+              -f "output[title]=Compatibility Tests" \
+              -f "output[summary]=${{ steps.result.outputs.summary }}" \
+              -f "details_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}

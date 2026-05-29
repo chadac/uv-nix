@@ -9,12 +9,12 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
+  checks: write
 
 jobs:
   check-release:
     runs-on: ubuntu-latest
-    outputs:
-      created: ${{ steps.signal.outputs.created }}
     steps:
       - uses: actions/checkout@v6
 
@@ -128,17 +128,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Signal PR created
-        id: signal
+      - name: Trigger compatibility tests on upgrade branch
         if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
-        run: echo "created=true" >> "$GITHUB_OUTPUT"
+        run: |
+          NEW_VERSION="${{ steps.latest.outputs.version }}"
+          BRANCH="auto/upgrade-uv-${NEW_VERSION}"
+          COMMIT_SHA=$(git rev-parse HEAD)
 
-  # Run compatibility tests after PR creation.
-  # GITHUB_TOKEN events don't trigger pull_request workflows, so we call
-  # the tests directly via workflow_call.
-  compatibility-tests:
-    needs: check-release
-    if: needs.check-release.outputs.created == 'true'
-    uses: ./.github/workflows/compatibility-tests.yml
-    permissions:
-      pull-requests: write
+          echo "Dispatching compatibility tests on branch $BRANCH (sha: $COMMIT_SHA)"
+          gh workflow run compatibility-tests.yml \
+            --ref "$BRANCH" \
+            -f commit_sha="$COMMIT_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
