@@ -1,3 +1,5 @@
+set shell := ["nix", "develop", "-c", "bash", "-euo", "pipefail", "-c"]
+
 # Set up git hooks (run once after cloning)
 setup:
     git config core.hooksPath .githooks
@@ -5,8 +7,6 @@ setup:
 # Build the patched uv binary using cargo (fast, for development)
 build:
     bash scripts/apply-patches.sh
-    #!/usr/bin/env bash
-    set -euo pipefail
     cached-exec \
         Cargo.toml \
         $(find src/ -type f) \
@@ -20,27 +20,21 @@ build:
 # Uses uv's "fast-build" profile (opt-level=1, no LTO) for much faster builds
 # than --release (which uses fat LTO). Use `just install-release` for full optimization.
 install: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cargo build --manifest-path uv/Cargo.toml --package uv --profile fast-build --no-default-features --features "uv-distribution/static,test-defaults"
-    mkdir -p ~/.local/bin
-    cp uv/target/fast-build/uv ~/.local/bin/uv
+    cargo build --manifest-path uv/Cargo.toml --package uv --profile fast-build --no-default-features --features "uv-distribution/static,test-defaults" && \
+    mkdir -p ~/.local/bin && \
+    cp uv/target/fast-build/uv ~/.local/bin/uv && \
     echo "Installed uv to ~/.local/bin/uv"
 
 # Install fully optimized release binary (slow build — fat LTO)
 install-release: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cargo build --manifest-path uv/Cargo.toml --package uv --release --no-default-features --features "uv-distribution/static,test-defaults"
-    mkdir -p ~/.local/bin
-    cp uv/target/release/uv ~/.local/bin/uv
+    cargo build --manifest-path uv/Cargo.toml --package uv --release --no-default-features --features "uv-distribution/static,test-defaults" && \
+    mkdir -p ~/.local/bin && \
+    cp uv/target/release/uv ~/.local/bin/uv && \
     echo "Installed uv to ~/.local/bin/uv"
 
 # Force rebuild (ignores cache)
 build-force:
     bash scripts/apply-patches.sh
-    #!/usr/bin/env bash
-    set -euo pipefail
     cached-exec -f \
         Cargo.toml \
         $(find src/ -type f) \
@@ -60,8 +54,7 @@ nix-build:
 
 # Run formatting and lint checks (used by pre-commit hook)
 lint:
-    cargo fmt -- --check
-    cargo clippy --all-targets -- -D warnings
+    cargo fmt -- --check && cargo clippy --all-targets -- -D warnings
 
 # Auto-format code
 fmt:
@@ -94,14 +87,13 @@ test-patch: build
 # Usage: just test-docker [filter]
 # Examples: just test-docker mysqlclient, just test-docker "psycopg or pynacl"
 test-docker *FILTER: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd tests/docker
-    UV_BIN="$(pwd)/../../uv/target/debug/uv"
-    if [ -n "{{FILTER}}" ]; then
-        UV_BIN="$UV_BIN" uv run pytest -v -n auto -m 'not slow and not source_build' -k "{{FILTER}}"
-    else
-        UV_BIN="$UV_BIN" uv run pytest -v -n auto -m 'not slow and not source_build'
+    cd tests/docker && \
+    UV_BIN="$(pwd)/../../uv/target/debug/uv" && \
+    export UV_BIN && \
+    if [ -n "{{FILTER}}" ]; then \
+        uv run pytest -v -n auto -m 'not slow and not source_build' -k "{{FILTER}}"; \
+    else \
+        uv run pytest -v -n auto -m 'not slow and not source_build'; \
     fi
 
 # Run a specific package test
@@ -114,13 +106,11 @@ test-seq: build
 
 # Run install benchmarks (isolated venvs, sequential)
 bench: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    BENCH_OUTPUT="${BENCH_OUTPUT:-/tmp/uv-nix-bench/results.md}"
-    mkdir -p "$(dirname "$BENCH_OUTPUT")"
+    BENCH_OUTPUT="${BENCH_OUTPUT:-/tmp/uv-nix-bench/results.md}" && \
+    mkdir -p "$(dirname "$BENCH_OUTPUT")" && \
     UV_BIN="$(pwd)/uv/target/debug/uv" BENCH_OUTPUT="$BENCH_OUTPUT" \
-        cargo test --test bench_install -- --test-threads=1 --nocapture
-    echo "Results: $BENCH_OUTPUT"
+        cargo test --test bench_install -- --test-threads=1 --nocapture && \
+    echo "Results: $BENCH_OUTPUT" && \
     cat "$BENCH_OUTPUT"
 
 # Run all test suites
@@ -137,28 +127,24 @@ test-clean:
 # Spawn an interactive Docker container with uv + nix on PATH
 # Usage: just docker [image]
 docker image="busybox": build
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    UV_BIN="$(pwd)/uv/target/debug/uv"
-    NIX_BIN_DIR="$(dirname "$(readlink -f "$(which nix)")")"
-    CA_BUNDLE="$(ls -d /nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | sort | tail -1)"
-    GIT_BIN_DIR="$(dirname "$(readlink -f "$(which git)")")"
-    GIT_CORE_DIR="$(git --exec-path)"
-
+    UV_BIN="$(pwd)/uv/target/debug/uv" && \
+    NIX_BIN_DIR="$(dirname "$(readlink -f "$(which nix)")")" && \
+    CA_BUNDLE="$(ls -d /nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | sort | tail -1)" && \
+    GIT_BIN_DIR="$(dirname "$(readlink -f "$(which git)")")" && \
+    GIT_CORE_DIR="$(git --exec-path)" && \
     exec docker run --rm -it \
-        --workdir /work \
-        --network host \
-        -v "$(pwd):/work" \
-        -v "$UV_BIN:/usr/local/bin/uv:ro" \
-        -v "/nix:/nix" \
-        -v "$NIX_BIN_DIR:/nix-bin:ro" \
-        -v "$GIT_BIN_DIR:/git-bin:ro" \
-        -v "$GIT_CORE_DIR:/git-core:ro" \
-        -e "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/nix-bin:/git-bin" \
-        -e "NIX_REMOTE=daemon" \
-        -e "NIX_SSL_CERT_FILE=$CA_BUNDLE" \
-        -e "SSL_CERT_FILE=$CA_BUNDLE" \
-        -e "GIT_SSL_CAINFO=$CA_BUNDLE" \
-        -e "GIT_EXEC_PATH=/git-core" \
-        "{{image}}"
+    --workdir /work \
+    --network host \
+    -v "$(pwd):/work" \
+    -v "$UV_BIN:/usr/local/bin/uv:ro" \
+    -v "/nix:/nix" \
+    -v "$NIX_BIN_DIR:/nix-bin:ro" \
+    -v "$GIT_BIN_DIR:/git-bin:ro" \
+    -v "$GIT_CORE_DIR:/git-core:ro" \
+    -e "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/nix-bin:/git-bin" \
+    -e "NIX_REMOTE=daemon" \
+    -e "NIX_SSL_CERT_FILE=$CA_BUNDLE" \
+    -e "SSL_CERT_FILE=$CA_BUNDLE" \
+    -e "GIT_SSL_CAINFO=$CA_BUNDLE" \
+    -e "GIT_EXEC_PATH=/git-core" \
+    "{{image}}"

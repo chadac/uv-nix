@@ -312,7 +312,7 @@ fn build_nix_config(source: &nixpkgs::NixpkgsSource) -> anyhow::Result<NixConfig
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Platform-specific Nix expression
+    // Platform-specific Nix expression using nix eval --json (avoids nix build overhead)
     let expr = if darwin {
         format!(
             r#"let
@@ -323,7 +323,7 @@ fn build_nix_config(source: &nixpkgs::NixpkgsSource) -> anyhow::Result<NixConfig
   allLibs = [
 {lib_exprs}
   ];
-in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
+in {{
   patcher = "${{pkgs.darwin.cctools}}/bin/install_name_tool";
   interpreter = "";
   rpath = pkgs.lib.makeLibraryPath runtimeLibs;
@@ -332,7 +332,7 @@ in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
   coreutils_bin = "${{pkgs.coreutils}}/bin";
   pkg_config = "${{pkgs.pkg-config}}/bin/pkg-config";
   is_darwin = true;
-}})"#
+}}"#
         )
     } else {
         format!(
@@ -344,7 +344,7 @@ in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
   allLibs = [
 {lib_exprs}
   ];
-in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
+in {{
   patcher = "${{pkgs.patchelf}}/bin/patchelf";
   interpreter = pkgs.lib.strings.trim pkgs.stdenv.cc.bintools.dynamicLinker;
   rpath = pkgs.lib.makeLibraryPath runtimeLibs;
@@ -353,14 +353,14 @@ in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
   coreutils_bin = "${{pkgs.coreutils}}/bin";
   pkg_config = "${{pkgs.pkg-config}}/bin/pkg-config";
   is_darwin = false;
-}})"#
+}}"#
         )
     };
 
-    debug!("Building NixConfig via nix build (darwin={})", darwin);
+    debug!("Resolving NixConfig via nix eval (darwin={})", darwin);
 
     let mut cmd = crate::nix_command();
-    cmd.arg("build").arg("--no-link").arg("--print-out-paths");
+    cmd.arg("eval").arg("--json");
     if nixpkgs::requires_impure(source) {
         cmd.arg("--impure");
     }
@@ -368,11 +368,10 @@ in pkgs.writeText "uv-nix-config.json" (builtins.toJSON {{
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("nix build failed: {}", stderr.trim());
+        anyhow::bail!("nix eval failed: {}", stderr.trim());
     }
 
-    let result_path = String::from_utf8(output.stdout)?.trim().to_string();
-    let json_str = std::fs::read_to_string(&result_path)?;
+    let json_str = String::from_utf8(output.stdout)?;
     let config: NixConfig = serde_json::from_str(json_str.trim())?;
 
     debug!("Resolved NixConfig: {:?}", config);
