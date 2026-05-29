@@ -37,7 +37,7 @@ impl PatchConfig {
             patcher: nix.patcher.clone(),
             interpreter,
             rpath: nix
-                .library_path
+                .rpath
                 .split(':')
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from)
@@ -293,24 +293,29 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Check existing rpaths to skip already-patched binaries.
-    // Use otool -l to read LC_RPATH entries; if any point to /nix/store, skip.
-    let existing_output = Command::new("otool").arg("-l").arg(path).output().ok();
-    if let Some(ref out) = existing_output
-        && out.status.success()
-    {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        if stdout.contains("/nix/store") {
+    // Check if already patched by scanning the binary for /nix/store strings.
+    // This avoids spawning otool (which costs ~70ms per call on macOS).
+    if let Ok(bytes) = fs::read(path) {
+        if bytes
+            .windows(11)
+            .any(|w| w == b"/nix/store/")
+        {
             debug!("Already patched, skipping: {}", path.display());
             return Ok(());
         }
     }
 
+    // Deduplicate rpath entries to avoid "specified more than once" errors.
+    let unique_rpaths: Vec<&PathBuf> = {
+        let mut seen = std::collections::HashSet::new();
+        config.rpath.iter().filter(|p| seen.insert(*p)).collect()
+    };
+
     // Add all rpath entries in a single install_name_tool invocation.
     // install_name_tool supports multiple -add_rpath flags at once, which
-    // avoids spawning one process per rpath entry (~80 entries × N binaries).
+    // avoids spawning one process per rpath entry.
     let mut cmd = Command::new(&config.patcher);
-    for rpath_entry in &config.rpath {
+    for rpath_entry in &unique_rpaths {
         cmd.arg("-add_rpath").arg(rpath_entry);
     }
     cmd.arg(path);

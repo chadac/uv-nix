@@ -49,6 +49,7 @@
               pkgs.pkg-config
               # Dev tools
               pkgs.jq
+              pkgs.gnused
               cached-exec.packages.${system}.default
             ] ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.apple-sdk

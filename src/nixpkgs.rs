@@ -223,6 +223,9 @@ fn auto_resolve_nixpkgs(project_dir: &Path) -> Option<String> {
         return resolve_latest_nixpkgs_rev();
     }
 
+    // Nix won't see untracked files in a git repo — stage flake.nix first
+    git_stage(project_dir, "flake.nix");
+
     // Run `nix flake lock` to generate flake.lock
     let output = crate::nix_command()
         .arg("flake")
@@ -233,7 +236,6 @@ fn auto_resolve_nixpkgs(project_dir: &Path) -> Option<String> {
     match output {
         Ok(out) if out.status.success() => {
             debug!("Generated flake.lock via nix flake lock");
-            // Parse the newly created lock to get the rev
             match parse_flake_lock(&lock_path) {
                 Some(rev) => {
                     crate::status("Pinned", &format!("nixpkgs-unstable ({})", &rev[..12]));
@@ -248,16 +250,39 @@ fn auto_resolve_nixpkgs(project_dir: &Path) -> Option<String> {
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
             crate::status_warn(&format!("nix flake lock failed: {}", stderr.trim()));
-            // Clean up the flake.nix we created
-            let _ = std::fs::remove_file(&flake_path);
+            cleanup_generated_flake(project_dir, &flake_path);
             resolve_latest_nixpkgs_rev()
         }
         Err(err) => {
             crate::status_warn(&format!("Failed to run nix flake lock: {err}"));
-            let _ = std::fs::remove_file(&flake_path);
+            cleanup_generated_flake(project_dir, &flake_path);
             resolve_latest_nixpkgs_rev()
         }
     }
+}
+
+/// Stage a file in git (intent-to-add) so Nix can see it in a git repo.
+fn git_stage(project_dir: &Path, file: &str) {
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(project_dir)
+        .arg("add")
+        .arg("--intent-to-add")
+        .arg(file)
+        .output();
+}
+
+/// Remove a generated flake.nix and unstage it from git.
+fn cleanup_generated_flake(project_dir: &Path, flake_path: &Path) {
+    let _ = std::fs::remove_file(flake_path);
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(project_dir)
+        .arg("rm")
+        .arg("--cached")
+        .arg("--quiet")
+        .arg("flake.nix")
+        .output();
 }
 
 /// Resolve the latest commit of nixpkgs-unstable via `git ls-remote`.
