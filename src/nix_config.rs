@@ -55,6 +55,10 @@ pub struct NixConfig {
     pub rpath: String,
     /// Colon-separated library path (runtime + all package lib deps, for LIBRARY_PATH / RPATH patching).
     pub library_path: String,
+    /// Per-attr lib paths: maps nixpkgs attr name → `/nix/store/.../lib` path.
+    /// Used for targeted per-binary patching (soname resolution).
+    #[serde(default)]
+    pub rpath_map: std::collections::HashMap<String, PathBuf>,
     /// Path to stdenv.cc/bin (for PATH in build env).
     pub cc_bin: String,
     /// Path to coreutils/bin (for PATH in build env).
@@ -173,7 +177,7 @@ pub fn find_project_root(start: &Path) -> Option<PathBuf> {
 /// Compute a SHA-256 cache key from the nixpkgs key and both lib configs.
 fn compute_cache_key(nixpkgs_key: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"nix-config-v3\0");
+    hasher.update(b"nix-config-v4\0");
     hasher.update(nixpkgs_key.as_bytes());
     hasher.update(b"\0");
     hasher.update(DEFAULT_LIBS_JSON.as_bytes());
@@ -247,7 +251,7 @@ fn is_darwin() -> bool {
 ///
 /// Library selection is platform-aware: shared libs are always included,
 /// plus linux-specific or darwin-specific libs based on the current platform.
-fn collect_all_lib_attrs() -> anyhow::Result<(Vec<String>, Vec<String>)> {
+pub(crate) fn collect_all_lib_attrs() -> anyhow::Result<(Vec<String>, Vec<String>)> {
     let darwin = is_darwin();
 
     // Runtime libs (platform-specific structure)
@@ -312,6 +316,18 @@ fn build_nix_config(source: &nixpkgs::NixpkgsSource) -> anyhow::Result<NixConfig
         .collect::<Vec<_>>()
         .join("\n");
 
+    // Build rpath_map: { "attr" = "/nix/store/.../lib"; ... } for all lib attrs
+    let rpath_map_entries: String = all_lib_attrs
+        .iter()
+        .map(|a| {
+            format!(
+                "    \"{a}\" = pkgs.lib.getLib {} + \"/lib\";",
+                attr_resolve_expr(a)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
     // Platform-specific Nix expression using nix eval --json (avoids nix build overhead)
     let expr = if darwin {
         format!(
@@ -328,6 +344,9 @@ in {{
   interpreter = "";
   rpath = pkgs.lib.makeLibraryPath runtimeLibs;
   library_path = pkgs.lib.makeLibraryPath allLibs;
+  rpath_map = {{
+{rpath_map_entries}
+  }};
   cc_bin = "${{pkgs.stdenv.cc}}/bin";
   coreutils_bin = "${{pkgs.coreutils}}/bin";
   pkg_config = "${{pkgs.pkg-config}}/bin/pkg-config";
@@ -349,6 +368,9 @@ in {{
   interpreter = pkgs.lib.strings.trim pkgs.stdenv.cc.bintools.dynamicLinker;
   rpath = pkgs.lib.makeLibraryPath runtimeLibs;
   library_path = pkgs.lib.makeLibraryPath allLibs;
+  rpath_map = {{
+{rpath_map_entries}
+  }};
   cc_bin = "${{pkgs.stdenv.cc}}/bin";
   coreutils_bin = "${{pkgs.coreutils}}/bin";
   pkg_config = "${{pkgs.pkg-config}}/bin/pkg-config";
@@ -430,6 +452,7 @@ mod tests {
             interpreter: PathBuf::from("/nix/store/yyy/lib/ld-linux-x86-64.so.2"),
             rpath: "/nix/store/aaa/lib:/nix/store/bbb/lib".to_string(),
             library_path: "/nix/store/aaa/lib:/nix/store/bbb/lib:/nix/store/ccc/lib".to_string(),
+            rpath_map: std::collections::HashMap::new(),
             cc_bin: "/nix/store/ccc/bin".to_string(),
             coreutils_bin: "/nix/store/ddd/bin".to_string(),
             pkg_config: PathBuf::from("/nix/store/zzz/bin/pkg-config"),

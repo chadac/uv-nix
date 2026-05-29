@@ -14,6 +14,7 @@ sha2 = { version = "0.10" }
 toml = { version = ">=0.8" }
 toml_edit = { version = ">=0.22" }
 tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", optional = true }
 walkdir = { version = "2" }
 
 [dev-dependencies]
@@ -22,6 +23,12 @@ serde_json = { version = "1" }
 
 [features]
 default = []
+cli = ["tracing-subscriber"]
+
+[[bin]]
+name = "generate_soname_map"
+path = "src/bin/generate_soname_map.rs"
+required-features = ["cli"]
 
 [[test]]
 name = "wheel_install"

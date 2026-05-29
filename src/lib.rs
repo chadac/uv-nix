@@ -14,6 +14,7 @@ pub mod ctypes_hook;
 pub mod nix_config;
 pub mod nixpkgs;
 pub mod patchelf;
+pub mod soname;
 
 /// Returns the Nix system string for the current platform (e.g., "x86_64-linux", "aarch64-darwin").
 pub fn current_system() -> &'static str {
@@ -160,6 +161,10 @@ fn timing_enabled() -> bool {
 /// by their dist-info prefixes, e.g. `["numpy-2.4.6", "pandas-2.3.0"]`). This ensures
 /// each binary is patched exactly once from a pristine state — no accumulated rpaths.
 ///
+/// Uses soname analysis to determine per-binary rpath sets: each binary only gets
+/// rpath entries for the shared libraries it actually needs. Results are persisted
+/// to `.venv/share/uv-nix/patches.json`.
+///
 /// When `UV_NIX_TIMING=1` is set, emits a structured timing line to stderr:
 /// `uv-nix-timing: nix_resolve=Xms find_binaries=Xms (N files) patch=Xms total=Xms`
 pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
@@ -174,25 +179,39 @@ pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
 
     // Stage 1: Nix config resolution
     let t0 = Instant::now();
-    let mut patch_config = patchelf::PatchConfig::from_env();
+    let nix = nix_config::require();
+    let patch_config = patchelf::PatchConfig::from_env();
 
     // Resolve extra libraries from [tool.uv-nix] in pyproject.toml
+    let mut rpath_by_attr = nix.rpath_map.clone();
     if let Some(extra_rpath) = resolve_extra_libraries(site_packages) {
-        for path in extra_rpath.split(':').filter(|s| !s.is_empty()) {
-            patch_config.rpath.push(PathBuf::from(path));
+        for (i, path) in extra_rpath.split(':').filter(|s| !s.is_empty()).enumerate() {
+            rpath_by_attr.insert(format!("_extra_{i}"), PathBuf::from(path));
         }
     }
+
+    // Get nixpkgs rev for manifest
+    let nixpkgs_rev = {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let project_dir = nix_config::find_project_root(&cwd).unwrap_or(cwd);
+        let uv_nix_config = config::find_config(&project_dir)
+            .map(|(c, _)| c)
+            .unwrap_or_default();
+        let source = nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config);
+        nixpkgs::nixpkgs_cache_key(&source)
+    };
+
     let nix_resolve_ms = t0.elapsed().as_millis();
 
-    // Stage 2: Find native binaries from RECORD files of installed packages
+    // Stage 2: Find native binaries from RECORD files, grouped by package
     let t1 = Instant::now();
-    let binaries = collect_native_binaries_from_records(
+    let pkg_binaries = collect_package_binaries_from_records(
         site_packages,
         installed_packages,
         patch_config.is_darwin,
     );
     let find_ms = t1.elapsed().as_millis();
-    let n_binaries = binaries.len();
+    let n_binaries: usize = pkg_binaries.iter().map(|p| p.binaries.len()).sum();
 
     if n_binaries == 0 {
         if timing {
@@ -212,10 +231,64 @@ pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
         site_packages.display()
     );
 
-    // Stage 3: Patch binaries (these are fresh from cache — guaranteed unpatched)
+    // Stage 3: Plan targeted patches via soname analysis
     let t2 = Instant::now();
-    patchelf::patch_binaries(&binaries, &patch_config);
+    let (plans, manifest) = match soname::plan_patches(
+        site_packages,
+        &pkg_binaries,
+        &nix.patcher,
+        patch_config.is_darwin,
+        &rpath_by_attr,
+        &nixpkgs_rev,
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            // Soname resolution failed — fall back to global rpath patching
+            status_warn(&format!(
+                "Soname resolution failed, using global rpath: {err}"
+            ));
+            let all_binaries: Vec<PathBuf> = pkg_binaries
+                .iter()
+                .flat_map(|p| p.binaries.iter().cloned())
+                .collect();
+            patchelf::patch_binaries(&all_binaries, &patch_config);
+            if timing {
+                let total_ms = t_total.elapsed().as_millis();
+                eprintln!(
+                    "uv-nix-timing: nix_resolve={}ms find_binaries={}ms ({} files) patch={}ms total={}ms (fallback)",
+                    nix_resolve_ms,
+                    find_ms,
+                    n_binaries,
+                    t2.elapsed().as_millis(),
+                    total_ms
+                );
+            }
+            return;
+        }
+    };
+
+    // Stage 4: Apply targeted patches
+    for plan in &plans {
+        if let Err(err) = patchelf::patch_binary_targeted(
+            &plan.binary,
+            &plan.rpaths,
+            plan.needs_origin,
+            &patch_config,
+        ) {
+            debug!("Failed to patch {}: {err}", plan.binary.display());
+        }
+    }
     let patch_ms = t2.elapsed().as_millis();
+
+    // Stage 5: Save manifest
+    let venv_root = site_packages
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .unwrap_or(site_packages);
+    if let Err(err) = manifest.save(venv_root) {
+        debug!("Failed to save patch manifest: {err}");
+    }
 
     let total_ms = t_total.elapsed().as_millis();
 
@@ -227,16 +300,16 @@ pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
     }
 }
 
-/// Collect native binary paths from RECORD files of the given installed packages.
+/// Collect native binaries from RECORD files, grouped by package.
 ///
-/// For each dist-info prefix (e.g. "numpy-2.4.6"), reads its RECORD file and
-/// filters entries to native binaries (.so, .dylib, extensionless ELF/Mach-O).
-fn collect_native_binaries_from_records(
+/// For each dist-info prefix (e.g. "numpy-2.4.6"), reads its RECORD file,
+/// filters to native binaries, and returns a `PackageBinaries` struct.
+fn collect_package_binaries_from_records(
     site_packages: &Path,
     installed_packages: &[String],
     is_darwin: bool,
-) -> Vec<PathBuf> {
-    let mut binaries = Vec::new();
+) -> Vec<soname::PackageBinaries> {
+    let mut result = Vec::new();
 
     for dist_prefix in installed_packages {
         let record_path = site_packages
@@ -251,50 +324,81 @@ fn collect_native_binaries_from_records(
             }
         };
 
+        // Parse dist-info prefix: "numpy-2.4.6" → name="numpy", version="2.4.6"
+        let (name, version) = parse_dist_prefix(dist_prefix);
+
+        let mut binaries = Vec::new();
+
         for line in content.lines() {
-            // RECORD format: relative_path,hash,size
             let rel_path = match line.split(',').next() {
                 Some(p) if !p.is_empty() => p,
                 _ => continue,
             };
 
-            // Skip dist-info entries themselves
             if rel_path.contains(".dist-info/") {
                 continue;
             }
 
             let abs_path = site_packages.join(rel_path);
 
-            // Check if this looks like a native binary
             if !abs_path.is_file() {
                 continue;
             }
 
-            let name = match abs_path.file_name().and_then(|n| n.to_str()) {
+            let fname = match abs_path.file_name().and_then(|n| n.to_str()) {
                 Some(n) => n,
                 None => continue,
             };
 
             if is_darwin {
-                let is_dylib = name.contains(".dylib");
-                let is_so = name.contains(".so");
-                let is_extensionless = !name.contains('.');
+                let is_dylib = fname.contains(".dylib");
+                let is_so = fname.contains(".so");
+                let is_extensionless = !fname.contains('.');
                 if (is_dylib || is_so || is_extensionless)
                     && patchelf::is_native_binary(&abs_path, true)
                 {
                     binaries.push(abs_path);
                 }
             } else {
-                let is_so = name.contains(".so");
-                let is_extensionless = !name.contains('.');
+                let is_so = fname.contains(".so");
+                let is_extensionless = !fname.contains('.');
                 if (is_so || is_extensionless) && patchelf::is_native_binary(&abs_path, false) {
                     binaries.push(abs_path);
                 }
             }
         }
+
+        if !binaries.is_empty() {
+            result.push(soname::PackageBinaries {
+                name,
+                version,
+                binaries,
+            });
+        }
     }
 
-    binaries
+    result
+}
+
+/// Parse a dist-info prefix like "numpy-2.4.6" into (name, version).
+///
+/// The name portion uses underscores (dist-info normalization), and the version
+/// is everything after the last hyphen before the version starts (digits).
+fn parse_dist_prefix(prefix: &str) -> (String, String) {
+    // Find the split point: last hyphen followed by a digit
+    if let Some(idx) = prefix.rfind('-').and_then(|i| {
+        if prefix[i + 1..].starts_with(|c: char| c.is_ascii_digit()) {
+            Some(i)
+        } else {
+            None
+        }
+    }) {
+        let name = prefix[..idx].replace('_', "-");
+        let version = prefix[idx + 1..].to_string();
+        (name, version)
+    } else {
+        (prefix.replace('_', "-"), String::new())
+    }
 }
 
 /// Resolve extra library paths from `[tool.uv-nix]` in pyproject.toml.

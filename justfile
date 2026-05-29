@@ -60,6 +60,11 @@ lint:
 fmt:
     cargo fmt
 
+# Generate data/soname-map.json from current nixpkgs
+generate-soname-map:
+    cargo run --features cli --bin generate_soname_map > data/soname-map.json
+    echo "Updated data/soname-map.json"
+
 # Check local Rust crate compiles
 check:
     cargo check

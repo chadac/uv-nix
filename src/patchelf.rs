@@ -295,14 +295,11 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
 
     // Check if already patched by scanning the binary for /nix/store strings.
     // This avoids spawning otool (which costs ~70ms per call on macOS).
-    if let Ok(bytes) = fs::read(path) {
-        if bytes
-            .windows(11)
-            .any(|w| w == b"/nix/store/")
-        {
-            debug!("Already patched, skipping: {}", path.display());
-            return Ok(());
-        }
+    if let Ok(bytes) = fs::read(path)
+        && bytes.windows(11).any(|w| w == b"/nix/store/")
+    {
+        debug!("Already patched, skipping: {}", path.display());
+        return Ok(());
     }
 
     // Deduplicate rpath entries to avoid "specified more than once" errors.
@@ -356,6 +353,74 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Patch a single binary with specific rpaths (not the global config rpaths).
+///
+/// Used by the targeted patching path where each binary gets only the
+/// rpath entries it actually needs based on soname analysis.
+/// When `needs_origin` is true, ensures `$ORIGIN` is in the rpath even if
+/// `rpaths` is empty (for binaries with bundled sibling dependencies).
+pub fn patch_binary_targeted(
+    path: &Path,
+    rpaths: &[PathBuf],
+    needs_origin: bool,
+    config: &PatchConfig,
+) -> anyhow::Result<()> {
+    // Build a temporary config with the targeted rpaths
+    let targeted = PatchConfig {
+        patcher: config.patcher.clone(),
+        interpreter: config.interpreter.clone(),
+        rpath: rpaths.to_vec(),
+        is_darwin: config.is_darwin,
+    };
+    if config.is_darwin {
+        patch_macho_binary(path, &targeted)
+    } else if rpaths.is_empty() && needs_origin {
+        // Binary only needs $ORIGIN for bundled sibling libs — ensure it's set
+        ensure_origin_rpath(path, config)
+    } else {
+        patch_elf_binary(path, &targeted)
+    }
+}
+
+/// Ensure `$ORIGIN` is in a binary's rpath (for bundled sibling dependencies).
+///
+/// Only modifies the binary if `$ORIGIN` is not already present.
+fn ensure_origin_rpath(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
+    let existing = Command::new(&config.patcher)
+        .arg("--print-rpath")
+        .arg(path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    if existing.contains("$ORIGIN") {
+        return Ok(());
+    }
+
+    let new_rpath = if existing.is_empty() {
+        "$ORIGIN".to_string()
+    } else {
+        format!("{existing}:$ORIGIN")
+    };
+
+    let mut cmd = Command::new(&config.patcher);
+    cmd.arg("--set-rpath").arg(&new_rpath).arg(path);
+    debug!("Running: {:?}", cmd);
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "patchelf --set-rpath failed on {}: {}",
+            path.display(),
+            stderr.trim()
+        );
+    }
     Ok(())
 }
 
