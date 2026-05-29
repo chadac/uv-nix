@@ -5,12 +5,11 @@ on:
     branches: [main]
   push:
     branches: [main]
-  workflow_call:
   workflow_dispatch:
     inputs:
       test_scope:
         description: 'Test scope'
-        required: true
+        required: false
         default: 'core'
         type: choice
         options:
@@ -18,7 +17,7 @@ on:
           - all
       platforms:
         description: 'Platforms to test'
-        required: true
+        required: false
         default: 'all'
         type: choice
         options:
@@ -200,3 +199,4 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body-path: /tmp/comment-body.md
           edit-mode: replace
+

@@ -13,8 +13,6 @@ permissions:
 jobs:
   check-release:
     runs-on: ubuntu-latest
-    outputs:
-      created: ${{ steps.signal.outputs.created }}
     steps:
       - uses: actions/checkout@v6
 
@@ -128,17 +126,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Signal PR created
-        id: signal
+      - name: Trigger PR checks via close/reopen
         if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
-        run: echo "created=true" >> "$GITHUB_OUTPUT"
+        run: |
+          NEW_VERSION="${{ steps.latest.outputs.version }}"
+          BRANCH="auto/upgrade-uv-${NEW_VERSION}"
 
-  # Run compatibility tests after PR creation.
-  # GITHUB_TOKEN events don't trigger pull_request workflows, so we call
-  # the tests directly via workflow_call.
-  compatibility-tests:
-    needs: check-release
-    if: needs.check-release.outputs.created == 'true'
-    uses: ./.github/workflows/compatibility-tests.yml
-    permissions:
-      pull-requests: write
+          # GITHUB_TOKEN PR events don't trigger workflows.
+          # Closing and reopening the PR triggers pull_request events
+          # from a different context, which does trigger workflows.
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')
+          echo "Closing and reopening PR #$PR_NUMBER to trigger checks"
+          gh pr close "$PR_NUMBER"
+          gh pr reopen "$PR_NUMBER"
+        env:
+          GH_TOKEN: ${{ github.token }}
