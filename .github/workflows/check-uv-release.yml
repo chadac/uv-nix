@@ -14,7 +14,7 @@ jobs:
   check-release:
     runs-on: ubuntu-latest
     outputs:
-      created: ${{ steps.create_pr.outputs.created }}
+      created: ${{ steps.signal.outputs.created }}
     steps:
       - uses: actions/checkout@v6
 
@@ -91,7 +91,6 @@ jobs:
           nix develop --command bash scripts/update-lockfile.sh
 
       - name: Create PR
-        id: create_pr
         if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
         run: |
           NEW_VERSION="${{ steps.latest.outputs.version }}"
@@ -109,12 +108,13 @@ jobs:
 
           gh pr create \
             --title "refactor: upgrade uv to ${NEW_VERSION}" \
-            --body "## Summary
+            --body "$(cat <<'EOF'
+          ## Summary
 
           Automated upgrade to uv [${NEW_VERSION}](https://github.com/astral-sh/uv/releases/tag/${NEW_VERSION}).
 
-          - Updated \`data/uv.json\` with new version and source hash
-          - Updated \`data/Cargo.lock\` for the patched workspace
+          - Updated `data/uv.json` with new version and source hash
+          - Updated `data/Cargo.lock` for the patched workspace
 
           ## Checklist
 
@@ -122,14 +122,21 @@ jobs:
           - [ ] Compatibility tests pass
           - [ ] Merge to trigger artifact publishing
 
-          Generated automatically by the check-uv-release workflow."
-
-          echo "created=true" >> $GITHUB_OUTPUT
+          Generated automatically by the check-uv-release workflow.
+          EOF
+          )"
         env:
           GH_TOKEN: ${{ github.token }}
 
+      # Separate step for output to avoid shell quoting issues with gh pr create
+      - name: Signal PR created
+        id: signal
+        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
+        run: echo "created=true" >> $GITHUB_OUTPUT
+
   # Run compatibility tests after PR creation.
-  # GITHUB_TOKEN push/PR events don't trigger workflows, so call directly.
+  # GITHUB_TOKEN events don't trigger pull_request workflows, so we call
+  # the tests directly via workflow_call.
   compatibility-tests:
     needs: check-release
     if: needs.check-release.outputs.created == 'true'
