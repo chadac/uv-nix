@@ -9,11 +9,12 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  actions: write
 
 jobs:
   check-release:
     runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.create_pr.outputs.created }}
     steps:
       - uses: actions/checkout@v6
 
@@ -90,6 +91,7 @@ jobs:
           nix develop --command bash scripts/update-lockfile.sh
 
       - name: Create PR
+        id: create_pr
         if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
         run: |
           NEW_VERSION="${{ steps.latest.outputs.version }}"
@@ -117,17 +119,20 @@ jobs:
           ## Checklist
 
           - [ ] Garnix builds pass
+          - [ ] Compatibility tests pass
           - [ ] Merge to trigger artifact publishing
 
           Generated automatically by the check-uv-release workflow."
+
+          echo "created=true" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Trigger compatibility tests on upgrade branch
-        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
-        run: |
-          NEW_VERSION="${{ steps.latest.outputs.version }}"
-          BRANCH="auto/upgrade-uv-${NEW_VERSION}"
-          gh workflow run compatibility-tests.yml --ref "$BRANCH"
-        env:
-          GH_TOKEN: ${{ github.token }}
+  # Run compatibility tests after PR creation.
+  # GITHUB_TOKEN push/PR events don't trigger workflows, so call directly.
+  compatibility-tests:
+    needs: check-release
+    if: needs.check-release.outputs.created == 'true'
+    uses: ./.github/workflows/compatibility-tests.yml
+    permissions:
+      pull-requests: write
