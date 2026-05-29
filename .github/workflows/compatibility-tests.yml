@@ -55,6 +55,9 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core' || inputs.test_scope == ''
         run: nix develop --command just test
 
+      - name: Run nix gen integration test
+        run: nix develop --command just test-nix-gen
+
       - name: Run all tests
         if: github.event_name == 'workflow_dispatch' && inputs.test_scope == 'all'
         run: nix develop --command just test-all
@@ -84,6 +87,9 @@ jobs:
       - name: Run core tests
         if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core' || inputs.test_scope == ''
         run: nix develop --command just test
+
+      - name: Run nix gen integration test
+        run: nix develop --command just test-nix-gen
 
       - name: Run all tests
         if: github.event_name == 'workflow_dispatch' && inputs.test_scope == 'all'

@@ -118,8 +118,12 @@ bench: build
     echo "Results: $BENCH_OUTPUT" && \
     cat "$BENCH_OUTPUT"
 
+# Run uv nix gen integration test (builds uv2nix venv from generated expression)
+test-nix-gen: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" bash tests/nix-gen/test-nix-gen.sh
+
 # Run all test suites
-test-all: test-wheel test-source test-patch test-docker
+test-all: test-wheel test-source test-patch test-docker test-nix-gen
 
 # Clear test venv cache
 test-clean:

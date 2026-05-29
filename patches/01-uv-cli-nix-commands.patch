@@ -15,10 +15,10 @@ index e2a7281d6..8e3b0f4f9 100644
      /// Manage uv's cache.
      #[command(
          after_help = "Use `uv help cache` for more details.",
-@@ -856,6 +862,61 @@ pub struct SelfUpdateArgs {
+@@ -856,6 +862,79 @@ pub struct SelfUpdateArgs {
      pub dry_run: bool,
  }
-
+ 
 +#[derive(Args)]
 +pub struct NixNamespace {
 +    #[command(subcommand)]
@@ -31,6 +31,8 @@ index e2a7281d6..8e3b0f4f9 100644
 +    Patch(NixPatchArgs),
 +    /// Show information about patched packages in a virtual environment.
 +    Info(NixInfoArgs),
++    /// Generate Nix expressions for uv2nix from patch data.
++    Gen(NixGenArgs),
 +}
 +
 +#[derive(Args)]
@@ -72,6 +74,22 @@ index e2a7281d6..8e3b0f4f9 100644
 +    /// Show build configuration for a specific package instead of venv info.
 +    #[arg(short, long)]
 +    pub package: Option<String>,
++}
++
++#[derive(Args)]
++pub struct NixGenArgs {
++    /// Path to the virtual environment.
++    #[arg(default_value = ".venv")]
++    pub venv: PathBuf,
++    /// Write output to a file instead of stdout.
++    #[arg(short, long)]
++    pub output: Option<PathBuf>,
++    /// Only generate the native library override overlay, not the full package.nix.
++    #[arg(long)]
++    pub overlay_only: bool,
++    /// Prefer source distributions over wheels.
++    #[arg(long)]
++    pub no_prefer_wheels: bool,
 +}
 +
  #[derive(Args)]

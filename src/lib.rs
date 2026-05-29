@@ -12,6 +12,7 @@ pub mod cli;
 pub mod config;
 pub mod ctypes_hook;
 pub mod nix_config;
+pub mod nixgen;
 pub mod nixpkgs;
 pub mod patchelf;
 pub mod soname;
@@ -48,6 +49,7 @@ pub fn current_system() -> &'static str {
 // Re-export CLI types for ergonomic use from uv crate
 pub use cli::{CliOutput, InfoOptions, PatchOptions};
 pub use cli::{nix_info, nix_patch};
+pub use nixgen::{GenOptions, nix_gen};
 
 /// Create a `nix` command with the required experimental features enabled.
 ///
@@ -405,7 +407,7 @@ fn parse_dist_prefix(prefix: &str) -> (String, String) {
 ///
 /// Searches upward from the given path for a pyproject.toml with extra-libraries
 /// configured, then resolves them via nix eval (with caching).
-fn resolve_extra_libraries(start: &Path) -> Option<String> {
+pub fn resolve_extra_libraries(start: &Path) -> Option<String> {
     let (uv_nix_config, project_dir) = config::find_config(start)?;
 
     if uv_nix_config.extra_libraries.is_empty() {
