@@ -101,11 +101,16 @@ jobs:
           git fetch origin "$BRANCH" 2>/dev/null || true
           git checkout -b "$BRANCH"
           git add data/uv.json data/Cargo.lock
-          git commit -m "refactor: upgrade uv to ${NEW_VERSION}"
+          git commit -m "chore: upgrade uv to ${NEW_VERSION}"
+
+          # Use a repo-scoped fine-grained PAT for the push and PR creation.
+          # GITHUB_TOKEN push/PR events don't trigger on:pull_request workflows;
+          # a PAT from a different identity does.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git push --force-with-lease origin "$BRANCH"
 
           gh pr create \
-            --title "refactor: upgrade uv to ${NEW_VERSION}" \
+            --title "chore: upgrade uv to ${NEW_VERSION}" \
             --body "$(cat <<EOF
           ## Summary
 
@@ -116,7 +121,6 @@ jobs:
 
           ## Checklist
 
-          - [ ] Garnix builds pass
           - [ ] Compatibility tests pass
           - [ ] Merge to trigger artifact publishing
 
@@ -124,20 +128,4 @@ jobs:
           EOF
           )"
         env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Trigger PR checks via close/reopen
-        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
-        run: |
-          NEW_VERSION="${{ steps.latest.outputs.version }}"
-          BRANCH="auto/upgrade-uv-${NEW_VERSION}"
-
-          # GITHUB_TOKEN PR events don't trigger workflows.
-          # Closing and reopening the PR triggers pull_request events
-          # from a different context, which does trigger workflows.
-          PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')
-          echo "Closing and reopening PR #$PR_NUMBER to trigger checks"
-          gh pr close "$PR_NUMBER"
-          gh pr reopen "$PR_NUMBER"
-        env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.UV_NIX_PAT }}
