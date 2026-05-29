@@ -13,8 +13,6 @@ permissions:
 jobs:
   check-release:
     runs-on: ubuntu-latest
-    outputs:
-      created: ${{ steps.signal.outputs.created }}
     steps:
       - uses: actions/checkout@v6
 
@@ -108,13 +106,13 @@ jobs:
 
           gh pr create \
             --title "refactor: upgrade uv to ${NEW_VERSION}" \
-            --body "$(cat <<'EOF'
+            --body "$(cat <<EOF
           ## Summary
 
           Automated upgrade to uv [${NEW_VERSION}](https://github.com/astral-sh/uv/releases/tag/${NEW_VERSION}).
 
-          - Updated `data/uv.json` with new version and source hash
-          - Updated `data/Cargo.lock` for the patched workspace
+          - Updated \`data/uv.json\` with new version and source hash
+          - Updated \`data/Cargo.lock\` for the patched workspace
 
           ## Checklist
 
@@ -128,18 +126,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      # Separate step for output to avoid shell quoting issues with gh pr create
-      - name: Signal PR created
-        id: signal
-        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
-        run: echo "created=true" >> $GITHUB_OUTPUT
-
-  # Run compatibility tests after PR creation.
+  # Run compatibility tests after check-release completes.
   # GITHUB_TOKEN events don't trigger pull_request workflows, so we call
-  # the tests directly via workflow_call.
+  # the tests directly via workflow_call. This always runs (even when no
+  # upgrade was needed) — the cost is low since it just builds and tests
+  # what's already on main.
   compatibility-tests:
     needs: check-release
-    if: needs.check-release.outputs.created == 'true'
     uses: ./.github/workflows/compatibility-tests.yml
     permissions:
       pull-requests: write
