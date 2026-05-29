@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   check-release:
@@ -97,10 +98,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Fetch in case a previous run left a stale branch
+          git fetch origin "$BRANCH" 2>/dev/null || true
           git checkout -b "$BRANCH"
           git add data/uv.json data/Cargo.lock
           git commit -m "refactor: upgrade uv to ${NEW_VERSION}"
-          git push origin "$BRANCH"
+          git push --force-with-lease origin "$BRANCH"
 
           gh pr create \
             --title "refactor: upgrade uv to ${NEW_VERSION}" \
@@ -116,7 +119,15 @@ jobs:
           - [ ] Garnix builds pass
           - [ ] Merge to trigger artifact publishing
 
-          Generated automatically by the check-uv-release workflow." \
-            --label "automated"
+          Generated automatically by the check-uv-release workflow."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Trigger compatibility tests on upgrade branch
+        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
+        run: |
+          NEW_VERSION="${{ steps.latest.outputs.version }}"
+          BRANCH="auto/upgrade-uv-${NEW_VERSION}"
+          gh workflow run compatibility-tests.yml --ref "$BRANCH"
         env:
           GH_TOKEN: ${{ github.token }}
