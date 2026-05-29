@@ -1,132 +1,79 @@
 name: Publish Artifacts
 
 on:
-  # Trigger after Garnix builds complete (via check_suite)
-  check_suite:
-    types: [completed]
-  # Manual trigger
-  workflow_dispatch:
-  # Also trigger on tags for releases
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    paths:
+      - 'data/uv.json'
+  workflow_dispatch:
 
 jobs:
-  # Wait for Garnix to complete before publishing
-  wait-for-garnix:
-    # Only run on main branch or tags, and only if check_suite is from Garnix
-    if: |
-      (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
-      (github.event_name == 'check_suite' &&
-       github.event.check_suite.app.slug == 'garnix-ci' &&
-       github.event.check_suite.conclusion == 'success' &&
-       github.event.check_suite.head_branch == 'main')
-    runs-on: ubuntu-latest
-    outputs:
-      should_publish: ${{ steps.check.outputs.should_publish }}
-    steps:
-      - name: Check if we should publish
-        id: check
-        run: |
-          echo "should_publish=true" >> $GITHUB_OUTPUT
-          echo "Garnix build completed successfully, proceeding to publish artifacts"
-
-  # Build and publish x86_64-linux artifact
-  publish-linux:
-    needs: wait-for-garnix
-    if: needs.wait-for-garnix.outputs.should_publish == 'true'
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            artifact-suffix: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            artifact-suffix: linux-aarch64
+          - runner: macos-latest
+            artifact-suffix: darwin-arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
 
       - uses: cachix/install-nix-action@v31
 
-      - name: Fetch from Garnix cache
-        id: fetch
+      - uses: cachix/cachix-action@v15
+        with:
+          name: uv-nix
+
+      - name: Build uv
+        id: build
         run: |
-          nix build .#default --out-link result -L \
-            --extra-substituters "https://cache.garnix.io" \
-            --extra-trusted-public-keys "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
+          nix build .#default --out-link result -L
           ACTUAL_VERSION=$(./result/bin/uv --version | awk '{print $2}')
           echo "version=$ACTUAL_VERSION" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
-          name: uv-nix-${{ steps.fetch.outputs.version }}-linux-x86_64
+          name: uv-nix-${{ steps.build.outputs.version }}-${{ matrix.artifact-suffix }}
           path: result/bin/uv
           retention-days: 90
 
-  # Build and publish aarch64-linux artifact
-  publish-linux-arm:
-    needs: wait-for-garnix
-    if: needs.wait-for-garnix.outputs.should_publish == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: cachix/install-nix-action@v31
-
-      - name: Fetch from Garnix cache
-        id: fetch
-        run: |
-          nix build .#packages.aarch64-linux.default --out-link result -L \
-            --extra-substituters "https://cache.garnix.io" \
-            --extra-trusted-public-keys "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
-          # Read version from data/uv.json (can't run ARM binary on x86)
-          UV_VERSION=$(jq -r .version data/uv.json)
-          echo "version=${UV_VERSION}-nix" >> $GITHUB_OUTPUT
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: uv-nix-${{ steps.fetch.outputs.version }}-linux-aarch64
-          path: result/bin/uv
-          retention-days: 90
-
-  # Build and publish aarch64-darwin artifact
-  publish-macos:
-    needs: wait-for-garnix
-    if: needs.wait-for-garnix.outputs.should_publish == 'true'
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: cachix/install-nix-action@v31
-
-      - name: Fetch from Garnix cache
-        id: fetch
-        run: |
-          nix build .#default --out-link result -L \
-            --extra-substituters "https://cache.garnix.io" \
-            --extra-trusted-public-keys "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
-          ACTUAL_VERSION=$(./result/bin/uv --version | awk '{print $2}')
-          echo "version=$ACTUAL_VERSION" >> $GITHUB_OUTPUT
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: uv-nix-${{ steps.fetch.outputs.version }}-darwin-arm64
-          path: result/bin/uv
-          retention-days: 90
-
-  # Create a release when triggered by a tag
   release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [publish-linux, publish-linux-arm, publish-macos]
+    needs: [build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
 
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(jq -r .version data/uv.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Check if tag exists
+        id: tag_check
+        run: |
+          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        if: steps.tag_check.outputs.exists == 'false'
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
 
       - name: Prepare release assets
+        if: steps.tag_check.outputs.exists == 'false'
         run: |
           mkdir -p release
           for dir in artifacts/*/; do
@@ -135,8 +82,19 @@ jobs:
           done
           ls -la release/
 
-      - name: Create Release
+      - name: Create tag and release
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git tag "$VERSION"
+          git push origin "$VERSION"
+        env:
+          GH_TOKEN: ${{ secrets.UV_NIX_PAT }}
+
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.version.outputs.version }}
           files: release/*
           generate_release_notes: true
