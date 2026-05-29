@@ -13,6 +13,8 @@ permissions:
 jobs:
   check-release:
     runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.signal.outputs.created }}
     steps:
       - uses: actions/checkout@v6
 
@@ -126,13 +128,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # Run compatibility tests after check-release completes.
+      - name: Signal PR created
+        id: signal
+        if: steps.check.outputs.needed == 'true' && steps.existing_pr.outputs.exists == 'false'
+        run: echo "created=true" >> "$GITHUB_OUTPUT"
+
+  # Run compatibility tests after PR creation.
   # GITHUB_TOKEN events don't trigger pull_request workflows, so we call
-  # the tests directly via workflow_call. This always runs (even when no
-  # upgrade was needed) — the cost is low since it just builds and tests
-  # what's already on main.
+  # the tests directly via workflow_call.
   compatibility-tests:
     needs: check-release
+    if: needs.check-release.outputs.created == 'true'
     uses: ./.github/workflows/compatibility-tests.yml
     permissions:
       pull-requests: write

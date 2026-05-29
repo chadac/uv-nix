@@ -33,6 +33,7 @@ jobs:
   test-ubuntu:
     if: >-
       github.event_name != 'workflow_dispatch' ||
+      inputs.platforms == '' ||
       inputs.platforms == 'all' ||
       inputs.platforms == 'ubuntu-only'
     runs-on: ubuntu-latest
@@ -52,7 +53,7 @@ jobs:
         run: nix develop --command just build
 
       - name: Run core tests
-        if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core'
+        if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core' || inputs.test_scope == ''
         run: nix develop --command just test
 
       - name: Run all tests
@@ -62,6 +63,7 @@ jobs:
   test-macos:
     if: >-
       github.event_name != 'workflow_dispatch' ||
+      inputs.platforms == '' ||
       inputs.platforms == 'all' ||
       inputs.platforms == 'macos-only'
     runs-on: macos-latest
@@ -81,7 +83,7 @@ jobs:
         run: nix develop --command just build
 
       - name: Run core tests
-        if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core'
+        if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core' || inputs.test_scope == ''
         run: nix develop --command just test
 
       - name: Run all tests
