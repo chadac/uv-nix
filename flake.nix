@@ -18,22 +18,19 @@
 
       flake.overlays.default = final: prev: {
         uv-nix = final.callPackage ./. { craneLib = crane.mkLib final; };
-        uv-nix-bin =
-          let binaries = import ./nix/uv-nix-binaries.nix { pkgs = final; };
-          in binaries.latest or null;
+        uv-nix-bin = import ./nix/bin.nix { pkgs = final; };
       };
 
       perSystem = { pkgs, system, lib, ... }:
         let
           package = pkgs.callPackage ./. { craneLib = crane.mkLib pkgs; };
-          binaries = import ./nix/uv-nix-binaries.nix { inherit pkgs; };
+          binPkg = import ./nix/bin.nix { inherit pkgs; };
         in {
           packages = {
             default = package;
-            src = package;
-          } // lib.optionalAttrs (binaries.latest or null != null) {
-            bin = binaries.latest;
-          } // binaries;
+          } // lib.optionalAttrs (binPkg != null) {
+            bin = binPkg;
+          };
 
           devShells.default = pkgs.mkShell {
             buildInputs = [

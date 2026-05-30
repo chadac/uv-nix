@@ -51,6 +51,12 @@ jobs:
       - name: Build patched uv
         run: nix develop --command just build
 
+      - name: Test binary package
+        run: |
+          nix build .#bin --no-link --print-out-paths
+          BIN=$(nix build .#bin --no-link --print-out-paths 2>/dev/null)
+          echo "Binary version: $($BIN/bin/uv --version)"
+
       - name: Run core tests
         if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core' || inputs.test_scope == ''
         run: nix develop --command just test
@@ -83,6 +89,12 @@ jobs:
 
       - name: Build patched uv
         run: nix develop --command just build
+
+      - name: Test binary package
+        run: |
+          nix build .#bin --no-link --print-out-paths
+          BIN=$(nix build .#bin --no-link --print-out-paths 2>/dev/null)
+          echo "Binary version: $($BIN/bin/uv --version)"
 
       - name: Run core tests
         if: github.event_name != 'workflow_dispatch' || inputs.test_scope == 'core' || inputs.test_scope == ''

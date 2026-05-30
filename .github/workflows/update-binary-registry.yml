@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to register (e.g., v0.11.16-nix.1)'
+        description: 'Release tag to register (e.g., 0.11.17)'
         required: true
 
 permissions:
@@ -51,7 +51,6 @@ jobs:
 
           echo "Fetching hashes for release $TAG..."
 
-          # Fetch and hash each artifact
           fetch_hash() {
             local name="$1"
             local url="${RELEASE_BASE}/${TAG}/${name}"
@@ -65,13 +64,6 @@ jobs:
           HASH_LINUX_ARM=$(fetch_hash "$LINUX_ARM") || HASH_LINUX_ARM=""
           HASH_DARWIN_ARM=$(fetch_hash "$DARWIN_ARM") || HASH_DARWIN_ARM=""
 
-          echo "linux_x86_name=$LINUX_X86" >> $GITHUB_OUTPUT
-          echo "linux_x86_hash=$HASH_LINUX_X86" >> $GITHUB_OUTPUT
-          echo "linux_arm_name=$LINUX_ARM" >> $GITHUB_OUTPUT
-          echo "linux_arm_hash=$HASH_LINUX_ARM" >> $GITHUB_OUTPUT
-          echo "darwin_arm_name=$DARWIN_ARM" >> $GITHUB_OUTPUT
-          echo "darwin_arm_hash=$HASH_DARWIN_ARM" >> $GITHUB_OUTPUT
-
           # Check we got at least one hash
           if [ -z "$HASH_LINUX_X86" ] && [ -z "$HASH_LINUX_ARM" ] && [ -z "$HASH_DARWIN_ARM" ]; then
             echo "::error::No artifacts found for release $TAG"
@@ -83,104 +75,72 @@ jobs:
           echo "  aarch64-linux: $HASH_LINUX_ARM"
           echo "  aarch64-darwin: $HASH_DARWIN_ARM"
 
-      - name: Update nix/uv-nix-binaries.nix
+          echo "linux_x86_name=$LINUX_X86" >> $GITHUB_OUTPUT
+          echo "linux_x86_hash=$HASH_LINUX_X86" >> $GITHUB_OUTPUT
+          echo "linux_arm_name=$LINUX_ARM" >> $GITHUB_OUTPUT
+          echo "linux_arm_hash=$HASH_LINUX_ARM" >> $GITHUB_OUTPUT
+          echo "darwin_arm_name=$DARWIN_ARM" >> $GITHUB_OUTPUT
+          echo "darwin_arm_hash=$HASH_DARWIN_ARM" >> $GITHUB_OUTPUT
+
+      - name: Update data/bin.json
         run: |
           TAG="${{ steps.release.outputs.tag }}"
           VERSION="${{ steps.release.outputs.version }}"
 
-          # Check if version already exists
-          if grep -q "\"${VERSION}\"" nix/uv-nix-binaries.nix; then
-            echo "Version ${VERSION} already in registry, skipping"
-            echo "SKIP=true" >> $GITHUB_ENV
-            exit 0
-          fi
-          echo "SKIP=false" >> $GITHUB_ENV
-
-          LINUX_X86_NAME="${{ steps.hashes.outputs.linux_x86_name }}"
-          LINUX_X86_HASH="${{ steps.hashes.outputs.linux_x86_hash }}"
-          LINUX_ARM_NAME="${{ steps.hashes.outputs.linux_arm_name }}"
-          LINUX_ARM_HASH="${{ steps.hashes.outputs.linux_arm_hash }}"
-          DARWIN_ARM_NAME="${{ steps.hashes.outputs.darwin_arm_name }}"
-          DARWIN_ARM_HASH="${{ steps.hashes.outputs.darwin_arm_hash }}"
-
-          # Build the new entry as a file
-          cat > /tmp/new-entry.nix <<ENTRY
-            "${VERSION}" = {
-              releaseTag = "${TAG}";
-              assets = {
-          ENTRY
-
-          [ -n "$LINUX_X86_HASH" ] && cat >> /tmp/new-entry.nix <<ENTRY
-                "x86_64-linux" = {
-                  name = "${LINUX_X86_NAME}";
-                  hash = "${LINUX_X86_HASH}";
-                };
-          ENTRY
-
-          [ -n "$LINUX_ARM_HASH" ] && cat >> /tmp/new-entry.nix <<ENTRY
-                "aarch64-linux" = {
-                  name = "${LINUX_ARM_NAME}";
-                  hash = "${LINUX_ARM_HASH}";
-                };
-          ENTRY
-
-          [ -n "$DARWIN_ARM_HASH" ] && cat >> /tmp/new-entry.nix <<ENTRY
-                "aarch64-darwin" = {
-                  name = "${DARWIN_ARM_NAME}";
-                  hash = "${DARWIN_ARM_HASH}";
-                };
-          ENTRY
-
-          cat >> /tmp/new-entry.nix <<ENTRY
-              };
-            };
-          ENTRY
-
-          # Insert after the `binaries = {` line using python for reliable multiline insert
           python3 -c "
-          import sys
-          entry = open('/tmp/new-entry.nix').read()
-          lines = open('nix/uv-nix-binaries.nix').read()
-          marker = '  binaries = {\n'
-          if marker not in lines:
-              print('ERROR: Could not find insertion point', file=sys.stderr)
-              sys.exit(1)
-          lines = lines.replace(marker, marker + entry, 1)
-          open('nix/uv-nix-binaries.nix', 'w').write(lines)
+          import json, sys
+
+          data = {
+              'version': '$VERSION',
+              'releaseTag': '$TAG',
+              'assets': {}
+          }
+
+          assets = [
+              ('x86_64-linux', '${{ steps.hashes.outputs.linux_x86_name }}', '${{ steps.hashes.outputs.linux_x86_hash }}'),
+              ('aarch64-linux', '${{ steps.hashes.outputs.linux_arm_name }}', '${{ steps.hashes.outputs.linux_arm_hash }}'),
+              ('aarch64-darwin', '${{ steps.hashes.outputs.darwin_arm_name }}', '${{ steps.hashes.outputs.darwin_arm_hash }}'),
+          ]
+
+          for system, name, hash in assets:
+              if hash:
+                  data['assets'][system] = {'name': name, 'hash': hash}
+
+          with open('data/bin.json', 'w') as f:
+              json.dump(data, f, indent=2)
+              f.write('\n')
+
+          print(json.dumps(data, indent=2))
           "
 
-          echo "Updated nix/uv-nix-binaries.nix:"
-          head -60 nix/uv-nix-binaries.nix
-
       - name: Create PR
-        if: env.SKIP != 'true'
         run: |
           VERSION="${{ steps.release.outputs.version }}"
           TAG="${{ steps.release.outputs.tag }}"
-          BRANCH="auto/add-binary-${VERSION}"
+          BRANCH="auto/update-binary-${VERSION}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git checkout -b "$BRANCH"
-          git add nix/uv-nix-binaries.nix
-          git commit -m "feat: add ${VERSION} pre-built binaries to registry"
+          git add data/bin.json
+          git commit -m "feat: update pre-built binary to ${VERSION}"
           git push origin "$BRANCH"
 
-          ATTR_VERSION=$(echo "${VERSION}" | tr '.' '-')
           gh pr create \
-            --title "feat: add ${VERSION} pre-built binaries to registry" \
-            --body "## Summary
+            --title "feat: update pre-built binary to ${VERSION}" \
+            --body "$(cat <<EOF
+          ## Summary
 
-          Adds pre-built binary hashes for uv-nix ${VERSION} from release [${TAG}](https://github.com/chadac/uv-nix/releases/tag/${TAG}).
+          Updates pre-built binary to uv-nix ${VERSION} from release [${TAG}](https://github.com/chadac/uv-nix/releases/tag/${TAG}).
 
           After merge, users can install with:
           \`\`\`bash
           nix profile install github:chadac/uv-nix#bin
-          nix profile install github:chadac/uv-nix#bin-${ATTR_VERSION}
           \`\`\`
 
-          Generated automatically by the update-binary-registry workflow." \
-            --label "automated"
+          Generated automatically by the update-binary-registry workflow.
+          EOF
+          )"
         env:
           GH_TOKEN: ${{ github.token }}
