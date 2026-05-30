@@ -215,21 +215,84 @@ pub fn nix_patch<O: Write, E: Write>(
     // Patch packages
     if !opts.only_python {
         let packages_to_patch = if let Some(ref pkg_names) = opts.packages {
-            // Find specific packages
             find_packages_by_name(&site_packages, pkg_names)
         } else {
-            // Find all packages with native binaries
             find_all_native_packages(&site_packages, config.is_darwin)
         };
 
-        for (pkg_name, pkg_path) in &packages_to_patch {
-            let _ = writeln!(out.stderr, "{}", format!("Patching {pkg_name}...").dimmed());
-            let binaries = patchelf::find_native_binaries(pkg_path, config.is_darwin);
-            for bin in &binaries {
-                if let Err(e) = patchelf::patch_binary(bin, &config) {
-                    debug!("Failed to patch {}: {}", bin.display(), e);
-                } else {
-                    patched_count += 1;
+        // Build PackageBinaries for soname resolution
+        let pkg_binaries: Vec<crate::soname::PackageBinaries> = packages_to_patch
+            .iter()
+            .map(|(pkg_name, pkg_path)| {
+                let binaries = patchelf::find_native_binaries(pkg_path, config.is_darwin);
+                let version = find_dist_info_version(&site_packages, pkg_name)
+                    .unwrap_or_else(|| "unknown".to_string());
+                crate::soname::PackageBinaries {
+                    name: pkg_name.clone(),
+                    version,
+                    binaries,
+                }
+            })
+            .filter(|p| !p.binaries.is_empty())
+            .collect();
+
+        // Try soname resolution for targeted patching + manifest generation
+        let nix = crate::nix_config::require();
+        let mut rpath_by_attr = nix.rpath_map.clone();
+        if let Some(extra_rpath) = crate::resolve_extra_libraries(&site_packages) {
+            for (i, path) in extra_rpath.split(':').filter(|s| !s.is_empty()).enumerate() {
+                rpath_by_attr.insert(format!("_extra_{i}"), std::path::PathBuf::from(path));
+            }
+        }
+
+        let nixpkgs_rev = {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let project_dir = crate::nix_config::find_project_root(&cwd).unwrap_or(cwd);
+            let uv_nix_config = crate::config::find_config(&project_dir)
+                .map(|(c, _)| c)
+                .unwrap_or_default();
+            let source = crate::nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config);
+            crate::nixpkgs::nixpkgs_cache_key(&source)
+        };
+
+        match crate::soname::plan_patches(
+            &site_packages,
+            &pkg_binaries,
+            &nix.patcher,
+            config.is_darwin,
+            &rpath_by_attr,
+            &nixpkgs_rev,
+        ) {
+            Ok((plans, manifest)) => {
+                for plan in &plans {
+                    if let Err(err) = patchelf::patch_binary_targeted(
+                        &plan.binary,
+                        &plan.rpaths,
+                        plan.needs_origin,
+                        &config,
+                    ) {
+                        debug!("Failed to patch {}: {err}", plan.binary.display());
+                    } else {
+                        patched_count += 1;
+                    }
+                }
+
+                // Save manifest
+                if let Err(err) = manifest.save(&venv_path) {
+                    warn!("Failed to save patch manifest: {err}");
+                }
+            }
+            Err(err) => {
+                // Fall back to global rpath patching
+                warn!("Soname resolution failed, using global rpath: {err}");
+                for pkg in &pkg_binaries {
+                    for bin in &pkg.binaries {
+                        if let Err(e) = patchelf::patch_binary(bin, &config) {
+                            debug!("Failed to patch {}: {}", bin.display(), e);
+                        } else {
+                            patched_count += 1;
+                        }
+                    }
                 }
             }
         }
@@ -450,6 +513,30 @@ fn find_all_native_packages(site_packages: &Path, is_darwin: bool) -> Vec<(Strin
     }
 
     result
+}
+
+/// Find the version of a package from its dist-info directory.
+///
+/// Looks for `<normalized_name>-*.dist-info/METADATA` and extracts the version.
+fn find_dist_info_version(site_packages: &Path, pkg_name: &str) -> Option<String> {
+    let normalized = pkg_name.to_lowercase().replace('-', "_");
+    if let Ok(entries) = std::fs::read_dir(site_packages) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !name_str.ends_with(".dist-info") {
+                continue;
+            }
+            // dist-info dir format: "<name>-<version>.dist-info"
+            let prefix = name_str.strip_suffix(".dist-info")?;
+            let dist_normalized = prefix.split('-').next()?.to_lowercase().replace('-', "_");
+            if dist_normalized == normalized {
+                // Extract version: everything after the first '-'
+                return prefix.split_once('-').map(|(_, v)| v.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Collect information about a venv's Nix patches.

@@ -95,7 +95,11 @@ pub struct NeededLibs {
 ///
 /// Returns one soname per line. Classifies each as system, origin-resolvable,
 /// or needs-resolution.
-fn read_elf_needed(binary: &Path, patchelf: &Path) -> anyhow::Result<NeededLibs> {
+fn read_elf_needed(
+    binary: &Path,
+    patchelf: &Path,
+    site_packages: &Path,
+) -> anyhow::Result<NeededLibs> {
     let output = std::process::Command::new(patchelf)
         .arg("--print-needed")
         .arg(binary)
@@ -130,7 +134,7 @@ fn read_elf_needed(binary: &Path, patchelf: &Path) -> anyhow::Result<NeededLibs>
         // Check if resolvable via $ORIGIN (bundled in same dir or .libs subdir)
         if binary_dir.join(soname).exists()
             || binary_dir.join("..").join(soname).exists()
-            || find_in_libs_dir(binary_dir, soname)
+            || find_in_libs_dir(site_packages, soname)
         {
             debug!("  origin-resolvable (skip): {soname}");
             origin_resolvable.push(soname.to_string());
@@ -148,15 +152,15 @@ fn read_elf_needed(binary: &Path, patchelf: &Path) -> anyhow::Result<NeededLibs>
     })
 }
 
-/// Check if a soname exists in a `.libs` sibling directory.
+/// Check if a soname exists in any `*.libs` directory under site-packages.
 ///
 /// Many wheels bundle shared libs in e.g. `numpy.libs/libopenblas64_.so`.
 /// The binary references them via $ORIGIN/../numpy.libs/ rpath.
-fn find_in_libs_dir(binary_dir: &Path, soname: &str) -> bool {
-    // Walk up to site-packages level and check for *.libs directories
-    if let Some(parent) = binary_dir.parent()
-        && let Ok(entries) = std::fs::read_dir(parent)
-    {
+/// We search all `*.libs` dirs at the site-packages root because a binary
+/// in one package (e.g. scipy) may reference a vendored lib bundled by
+/// another package (e.g. numpy.libs/libscipy_openblas64_.so).
+fn find_in_libs_dir(site_packages: &Path, soname: &str) -> bool {
+    if let Ok(entries) = std::fs::read_dir(site_packages) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
@@ -173,7 +177,7 @@ fn find_in_libs_dir(binary_dir: &Path, soname: &str) -> bool {
 /// Parses install names from load commands. The first indented line is the
 /// binary's own install name (skip it). Classifies rest as: system
 /// (/usr/lib, /System), @rpath/@loader_path (bundled), or needs-resolution.
-fn read_macho_needed(binary: &Path) -> anyhow::Result<NeededLibs> {
+fn read_macho_needed(binary: &Path, site_packages: &Path) -> anyhow::Result<NeededLibs> {
     let output = std::process::Command::new("otool")
         .arg("-L")
         .arg(binary)
@@ -229,7 +233,7 @@ fn read_macho_needed(binary: &Path) -> anyhow::Result<NeededLibs> {
             let lib_name = install_name.rsplit('/').next().unwrap_or(install_name);
 
             // Check if resolvable locally
-            if binary_dir.join(lib_name).exists() || find_in_libs_dir(binary_dir, lib_name) {
+            if binary_dir.join(lib_name).exists() || find_in_libs_dir(site_packages, lib_name) {
                 debug!("  origin-resolvable (skip): {install_name}");
                 origin_resolvable.push(install_name.to_string());
                 continue;
@@ -260,11 +264,12 @@ pub fn read_needed_libs(
     binary: &Path,
     patcher: &Path,
     is_darwin: bool,
+    site_packages: &Path,
 ) -> anyhow::Result<NeededLibs> {
     if is_darwin {
-        read_macho_needed(binary)
+        read_macho_needed(binary, site_packages)
     } else {
-        read_elf_needed(binary, patcher)
+        read_elf_needed(binary, patcher, site_packages)
     }
 }
 
@@ -353,17 +358,22 @@ pub fn resolve_binary(
         }
 
         if !still_unresolved.is_empty() {
-            let libs_list = still_unresolved.join(", ");
-            anyhow::bail!(
-                "Could not resolve shared libraries for {}: {libs_list}\n\n\
-                 These libraries are not in the pre-compiled soname map and were not found\n\
-                 in any resolved Nix library paths.\n\n\
+            let mut msg = format!(
+                "Could not resolve shared libraries for:\n  {}\n\nUnresolved libraries:\n",
+                needed.binary.display()
+            );
+            for lib in &still_unresolved {
+                msg.push_str(&format!("  - {lib}\n"));
+            }
+            msg.push_str(
+                "\nThese libraries are not in the pre-compiled soname map and were not found\n\
+                 in any resolved Nix library paths or bundled *.libs directories.\n\n\
                  To fix this, add the required nixpkgs attrs to your pyproject.toml:\n\n\
                  [tool.uv-nix]\n\
                  extra-libraries = [\"<nixpkgs-attr>\"]\n\n\
                  Then run `just generate-soname-map` to update the soname cache.",
-                needed.binary.display()
             );
+            anyhow::bail!(msg);
         }
     }
 
@@ -553,7 +563,7 @@ pub fn plan_patches(
         let mut pkg_patches = BTreeMap::new();
 
         for binary in &pkg.binaries {
-            let needed = match read_needed_libs(binary, patcher, is_darwin) {
+            let needed = match read_needed_libs(binary, patcher, is_darwin, site_packages) {
                 Ok(n) => n,
                 Err(err) => {
                     warn!("Failed to read needed libs for {}: {err}", binary.display());
@@ -566,7 +576,13 @@ pub fn plan_patches(
                 continue;
             }
 
-            let resolved = resolve_binary(&needed, platform_map, rpath_by_attr)?;
+            let resolved = match resolve_binary(&needed, platform_map, rpath_by_attr) {
+                Ok(r) => r,
+                Err(err) => {
+                    warn!("Failed to resolve {}: {err}", binary.display());
+                    continue;
+                }
+            };
 
             let rpaths: Vec<PathBuf> = resolved.rpaths_added.iter().map(PathBuf::from).collect();
 

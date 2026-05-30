@@ -22,6 +22,8 @@ This project provides a "best of both worlds approach" by:
   * Libraries like `zlib` and such use Nix-provided versions
   * It also hooks up the `ctypes` module with uv-nix so `find_library`
     and such work
+* It also provides the ability to generate a `uv2nix` expression,
+  enabling you to use Nix with uv properly
 
 These all are sourced preferentially from your
 `flake.nix`/devenv/flox configurations as well if you have
@@ -55,6 +57,14 @@ uv nix patch
 ```
 
 To recreate your venv with the patched Python binary and versions.
+
+It is also possible to generate a `uv2nix` derivation, which should
+include a slightly more reliable set of build inputs when needed. This
+can be done with:
+
+```bash
+uv nix gen -o venv.nix
+```
 
 ## Configuration
 
@@ -266,4 +276,22 @@ uv nix patch --only-python     # Only patch Python interpreter
 uv nix patch --only-packages   # Only patch installed packages
 uv nix patch --packages numpy  # Only patch specific packages
 ```
+
+### `uv nix gen [path]`
+
+Generate Nix expressions from the patch manifest. After installing
+packages (which automatically records native library dependencies),
+this command produces a ready-to-use Nix file for
+[uv2nix](https://github.com/adisbladis/uv2nix).
+
+```bash
+uv nix gen                     # Generate full package.nix to stdout
+uv nix gen -o package.nix      # Write to file
+uv nix gen --overlay-only      # Only the native lib override overlay
+```
+
+The default output is a complete `package.nix` with uv2nix workspace
+setup and native library overrides inlined. Use `--overlay-only` to
+get just the override overlay if you already have your own uv2nix
+setup.
 
