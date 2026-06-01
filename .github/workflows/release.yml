@@ -1,0 +1,178 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'data/uv.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            artifact-suffix: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            artifact-suffix: linux-aarch64
+          - runner: macos-latest
+            artifact-suffix: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v15
+        with:
+          name: uv-nix
+
+      - name: Build uv
+        id: build
+        run: |
+          nix build .#default --out-link result -L
+          ACTUAL_VERSION=$(./result/bin/uv --version | awk '{print $2}')
+          echo "version=$ACTUAL_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Hash artifact
+        id: hash
+        run: |
+          HASH=$(nix hash file --sri result/bin/uv)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "Hash: $HASH"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uv-nix-${{ steps.build.outputs.version }}-${{ matrix.artifact-suffix }}
+          path: result/bin/uv
+          retention-days: 90
+
+  release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          token: ${{ secrets.UV_NIX_PAT }}
+
+      - name: Get version and determine tag
+        id: version
+        run: |
+          VERSION=$(jq -r .version data/uv.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Find next available nix patch version for this uv version
+          git fetch --tags
+          PATCH=1
+          while git rev-parse "v${VERSION}-nix.${PATCH}" >/dev/null 2>&1; do
+            PATCH=$((PATCH + 1))
+          done
+          TAG="v${VERSION}-nix.${PATCH}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION, Tag: $TAG"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets and compute hashes
+        id: assets
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          mkdir -p release
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            cp "$dir/uv" "release/$name"
+          done
+          ls -la release/
+
+          # Compute SRI hashes from local artifacts
+          hash_asset() {
+            local file="$1"
+            if [ -f "$file" ]; then
+              nix hash file --sri "$file"
+            fi
+          }
+
+          LINUX_X86="uv-nix-${VERSION}-nix-linux-x86_64"
+          LINUX_ARM="uv-nix-${VERSION}-nix-linux-aarch64"
+          DARWIN_ARM="uv-nix-${VERSION}-nix-darwin-arm64"
+
+          HASH_LINUX_X86=$(hash_asset "release/$LINUX_X86")
+          HASH_LINUX_ARM=$(hash_asset "release/$LINUX_ARM")
+          HASH_DARWIN_ARM=$(hash_asset "release/$DARWIN_ARM")
+
+          echo "Hashes:"
+          echo "  x86_64-linux ($LINUX_X86): $HASH_LINUX_X86"
+          echo "  aarch64-linux ($LINUX_ARM): $HASH_LINUX_ARM"
+          echo "  aarch64-darwin ($DARWIN_ARM): $HASH_DARWIN_ARM"
+
+          echo "linux_x86_name=$LINUX_X86" >> $GITHUB_OUTPUT
+          echo "linux_x86_hash=$HASH_LINUX_X86" >> $GITHUB_OUTPUT
+          echo "linux_arm_name=$LINUX_ARM" >> $GITHUB_OUTPUT
+          echo "linux_arm_hash=$HASH_LINUX_ARM" >> $GITHUB_OUTPUT
+          echo "darwin_arm_name=$DARWIN_ARM" >> $GITHUB_OUTPUT
+          echo "darwin_arm_hash=$HASH_DARWIN_ARM" >> $GITHUB_OUTPUT
+
+      - name: Update data/bin.json and commit
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          python3 -c "
+          import json
+
+          data = {
+              'version': '${VERSION}',
+              'releaseTag': '${TAG}',
+              'assets': {}
+          }
+
+          assets = [
+              ('x86_64-linux', '${{ steps.assets.outputs.linux_x86_name }}', '${{ steps.assets.outputs.linux_x86_hash }}'),
+              ('aarch64-linux', '${{ steps.assets.outputs.linux_arm_name }}', '${{ steps.assets.outputs.linux_arm_hash }}'),
+              ('aarch64-darwin', '${{ steps.assets.outputs.darwin_arm_name }}', '${{ steps.assets.outputs.darwin_arm_hash }}'),
+          ]
+
+          for system, name, hash_val in assets:
+              if hash_val:
+                  data['assets'][system] = {'name': name, 'hash': hash_val}
+
+          with open('data/bin.json', 'w') as f:
+              json.dump(data, f, indent=2)
+              f.write('\n')
+
+          print(json.dumps(data, indent=2))
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add data/bin.json
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+
+          git commit -m "release: update binary to ${TAG}"
+          git push origin HEAD:main
+
+      - name: Tag release commit and publish
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          files: release/*
+          generate_release_notes: true
