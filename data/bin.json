@@ -1,0 +1,18 @@
+{
+  "version": "0.10.9",
+  "releaseTag": "v0.10.9-nix.1",
+  "assets": {
+    "x86_64-linux": {
+      "name": "uv-nix-0.10.9-linux-x86_64",
+      "hash": "sha256-N4cdXeLnBjSrFuwenzZVudHTcn5QNT/TYGsLZiYWZEM="
+    },
+    "aarch64-linux": {
+      "name": "uv-nix-0.10.9-nix-linux-aarch64",
+      "hash": "sha256-BB67XHdSqO+uFk9HCHEp9V9WA+qe3zqMX2cciFPxCK4="
+    },
+    "aarch64-darwin": {
+      "name": "uv-nix-0.10.9-darwin-arm64",
+      "hash": "sha256-zS9PkBFSLQLF5ihE+PU/OFFYFieTHitt2ghdhwUrqe4="
+    }
+  }
+}
