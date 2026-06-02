@@ -222,6 +222,11 @@ pub struct UvNixConfig {
     /// Per-package build configurations.
     #[serde(default, rename = "package")]
     pub packages: Vec<PackageConfig>,
+
+    /// Extra path prefixes considered safe (not rewritten during patching).
+    /// Added on top of the built-in defaults (`/usr/lib/`, `/System/Library/`).
+    #[serde(default)]
+    pub safe_prefixes: Vec<String>,
 }
 
 impl UvNixConfig {

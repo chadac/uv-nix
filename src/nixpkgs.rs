@@ -469,6 +469,145 @@ pub fn resolve_build_paths(
     Ok(result)
 }
 
+/// Resolved build environment from `nix print-dev-env`.
+///
+/// Contains the full set of environment variables that Nix would provide
+/// in a development shell with the package's build dependencies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedBuildEnv {
+    /// Environment variables (name → value) to inject into the build subprocess.
+    pub vars: std::collections::HashMap<String, String>,
+}
+
+/// Resolve a full build environment for a Python package using `nix print-dev-env`.
+///
+/// Constructs a `buildPythonPackage` derivation with the given dependencies and
+/// uses `inputsFrom` in a `mkShell` to capture the complete environment that Nix
+/// would provide — including the CC wrapper, PKG_CONFIG_PATH, NIX_LDFLAGS, etc.
+pub fn resolve_build_env(
+    libs: &[String],
+    build_tools: &[String],
+    package_name: &str,
+    source: &NixpkgsSource,
+) -> anyhow::Result<ResolvedBuildEnv> {
+    let pkgs_expr = nixpkgs_import_expr(source);
+
+    let build_inputs_exprs: String = libs
+        .iter()
+        .map(|attr| format!("    (pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let native_build_inputs_exprs: String = build_tools
+        .iter()
+        .map(|attr| format!("    (pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let expr = format!(
+        r#"let
+  pkgs = {pkgs_expr};
+  python = pkgs.python312;
+  libs = [
+{build_inputs_exprs}
+  ];
+  buildEnv = python.pkgs.buildPythonPackage {{
+    pname = "{package_name}";
+    version = "0.0.0";
+    pyproject = true;
+    src = builtins.toFile "dummy" "";
+    build-system = [ python.pkgs.setuptools ];
+    nativeBuildInputs = [
+      pkgs.pkg-config
+{native_build_inputs_exprs}
+    ];
+    buildInputs = libs;
+    dontBuild = true;
+    dontInstall = true;
+  }};
+in pkgs.mkShell {{
+  inputsFrom = [ buildEnv ];
+  C_INCLUDE_PATH = pkgs.lib.makeSearchPathOutput "dev" "include" libs;
+  LIBRARY_PATH = pkgs.lib.makeLibraryPath libs;
+}}"#
+    );
+
+    debug!(
+        "Resolving build env for {package_name} via nix print-dev-env (libs={:?}, build_tools={:?})",
+        libs, build_tools
+    );
+
+    let mut cmd = crate::nix_command();
+    cmd.arg("print-dev-env").arg("--json");
+    if requires_impure(source) {
+        cmd.arg("--impure");
+    }
+    let output = cmd.arg("--expr").arg(&expr).output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("nix print-dev-env failed for {package_name}: {}", stderr.trim());
+    }
+
+    let json_str = String::from_utf8(output.stdout)?;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DevEnvValue {
+        Str(String),
+        List(Vec<String>),
+    }
+
+    #[derive(Deserialize)]
+    struct DevEnvVar {
+        #[serde(default)]
+        value: Option<DevEnvValue>,
+        #[serde(default, rename = "type")]
+        var_type: String,
+    }
+
+    #[derive(Deserialize)]
+    struct DevEnvOutput {
+        #[serde(default)]
+        variables: std::collections::HashMap<String, DevEnvVar>,
+    }
+
+    let parsed: DevEnvOutput = serde_json::from_str(&json_str)?;
+
+    // Extract only exported variables that are relevant for builds
+    let relevant_vars = [
+        "PATH",
+        "CC",
+        "CXX",
+        "NIX_CC",
+        "NIX_CFLAGS_COMPILE",
+        "NIX_LDFLAGS",
+        "PKG_CONFIG",
+        "PKG_CONFIG_PATH",
+        "LIBRARY_PATH",
+        "C_INCLUDE_PATH",
+        "CPLUS_INCLUDE_PATH",
+        "CMAKE_PREFIX_PATH",
+        "HOST_PATH",
+    ];
+
+    let mut vars = std::collections::HashMap::new();
+    for (key, var) in &parsed.variables {
+        if var.var_type == "exported" && relevant_vars.contains(&key.as_str()) {
+            if let Some(ref val) = var.value {
+                let s = match val {
+                    DevEnvValue::Str(s) => s.clone(),
+                    DevEnvValue::List(v) => v.join(" "),
+                };
+                vars.insert(key.clone(), s);
+            }
+        }
+    }
+
+    debug!("Resolved {} build env vars for {package_name}", vars.len());
+    Ok(ResolvedBuildEnv { vars })
+}
+
 /// Resolve a list of nixpkgs attr paths to a colon-separated library path string
 /// using `nix eval`.
 pub fn resolve_library_paths(attrs: &[String], source: &NixpkgsSource) -> anyhow::Result<String> {

@@ -8,16 +8,29 @@ index 759375103..f27768ad9 100644
  uv-trampoline-builder = { workspace = true }
 +uv-nix = { workspace = true }
  uv-warnings = { workspace = true }
- 
+
  anyhow = { workspace = true }
 diff --git a/crates/uv-python/src/installation.rs b/crates/uv-python/src/installation.rs
-index adbcbd326..68a8ef2a0 100644
+index adbcbd326..a1b2c3d01 100644
 --- a/crates/uv-python/src/installation.rs
 +++ b/crates/uv-python/src/installation.rs
-@@ -326,6 +326,9 @@ impl PythonInstallation {
+@@ -148,6 +148,12 @@ impl PythonInstallation {
+
+         let err = match Self::find_existing(request, environments, preference, cache, preview) {
+             Ok(installation) => {
++                // Ensure managed Python is patched for Nix on first use.
++                if installation.is_managed() {
++                    uv_nix::post_python_install_patch(
++                        installation.interpreter().sys_base_prefix(),
++                    );
++                }
+                 installation
+                     .download_and_warn_if_outdated_prerelease(
+                         request,
+@@ -326,6 +332,9 @@ impl PythonInstallation {
              e.warn_user(&installed);
          }
- 
+
 +        // Patch ELF binaries and install ctypes hook for NixOS compatibility.
 +        uv_nix::post_python_install_patch(installed.path());
 +

@@ -32,95 +32,73 @@ pub struct EffectivePackageConfig {
 ///
 /// When `package_name` is provided, also resolves that package's specific
 /// dependencies from package-build-libs.json on demand (with caching).
-pub fn get_nix_build_env(package_name: Option<&str>) -> HashMap<OsString, OsString> {
+pub fn get_nix_build_env(package_name: Option<&str>) -> anyhow::Result<HashMap<OsString, OsString>> {
+    let Some(name) = package_name else {
+        return Ok(get_base_build_env());
+    };
+
+    let dev_env = resolve_package_dev_env(name)?;
     let mut env_vars: HashMap<OsString, OsString> = HashMap::new();
-
-    // Read defaults from NixConfig (Nix is required).
-    {
-        let nix = crate::nix_config::require();
-        // Clear PYTHONPATH to prevent host Python packages (e.g. from devenv/nix-shell)
-        // from leaking into build subprocesses and causing ABI confusion.
-        env_vars.insert(OsString::from("PYTHONPATH"), OsString::new());
-
-        // Set LIBRARY_PATH (linker search path) but NOT LD_LIBRARY_PATH,
-        // because LD_LIBRARY_PATH on NixOS poisons system tools (bash, gcc) by
-        // forcing them to load a different glibc than they were linked against.
-        // library_path includes runtime libs + all package lib deps (for linking).
-        prepend_env(
-            &mut env_vars,
-            "LIBRARY_PATH",
-            &OsString::from(&nix.library_path),
-        );
-
-        // Base PATH: stdenv.cc + coreutils + pkg-config's directory
-        // pkg-config must be on PATH because many build scripts call it directly
-        // (the PKG_CONFIG env var is only used by CMake/autotools, not shell scripts).
-        let pkg_config_dir = nix
-            .pkg_config
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let base_path = format!("{}:{}:{}", nix.cc_bin, nix.coreutils_bin, pkg_config_dir);
-        prepend_env(&mut env_vars, "PATH", &OsString::from(&base_path));
-
-        env_vars.insert(
-            OsString::from("PKG_CONFIG"),
-            OsString::from(&nix.pkg_config),
-        );
+    for (key, value) in &dev_env.vars {
+        env_vars.insert(OsString::from(key), OsString::from(value));
     }
+    env_vars.insert(OsString::from("PYTHONPATH"), OsString::new());
 
-    // Resolve per-package deps from package-build-libs.json + custom config
-    if let Some(name) = package_name
-        && let Some(resolved) = resolve_package_build_env(name)
-    {
-        if !resolved.library_path.is_empty() {
-            prepend_env(
-                &mut env_vars,
-                "LIBRARY_PATH",
-                &OsString::from(&resolved.library_path),
-            );
-            prepend_env(
-                &mut env_vars,
-                "C_INCLUDE_PATH",
-                &OsString::from(&resolved.include_path),
-            );
-            prepend_env(
-                &mut env_vars,
-                "PKG_CONFIG_PATH",
-                &OsString::from(&resolved.pkg_config_path),
-            );
-        }
-        if !resolved.bin_path.is_empty() {
-            prepend_env(&mut env_vars, "PATH", &OsString::from(&resolved.bin_path));
+    // Nix's pkg-config wrapper uses a platform-specific var (e.g.,
+    // PKG_CONFIG_PATH_x86_64_unknown_linux_gnu) and ignores PKG_CONFIG_PATH
+    // when it's set. Mirror our PKG_CONFIG_PATH into the platform-specific key.
+    if let Some(pkg_path) = env_vars.get(&OsString::from("PKG_CONFIG_PATH")).cloned() {
+        if let Some(key) = pkg_config_platform_key() {
+            env_vars.insert(OsString::from(key), pkg_path);
         }
     }
 
-    // Resolve per-project extra-libraries from [tool.uv-nix] in pyproject.toml
-    if let Some(extra) = resolve_extra_build_paths() {
-        prepend_env(
-            &mut env_vars,
-            "LIBRARY_PATH",
-            &OsString::from(&extra.library_path),
-        );
-        prepend_env(
-            &mut env_vars,
-            "C_INCLUDE_PATH",
-            &OsString::from(&extra.include_path),
-        );
-        prepend_env(
-            &mut env_vars,
-            "PKG_CONFIG_PATH",
-            &OsString::from(&extra.pkg_config_path),
-        );
-        if !extra.bin_path.is_empty() {
-            prepend_env(&mut env_vars, "PATH", &OsString::from(&extra.bin_path));
+    // Some packages (h5py) use dlopen() at build time to find libraries.
+    // LIBRARY_PATH only helps the linker; dlopen needs DYLD_FALLBACK_LIBRARY_PATH
+    // (macOS) or LD_LIBRARY_PATH (Linux).
+    if let Some(lib_path) = env_vars.get(&OsString::from("LIBRARY_PATH")).cloned() {
+        if cfg!(target_os = "macos") {
+            env_vars.insert(OsString::from("DYLD_FALLBACK_LIBRARY_PATH"), lib_path);
+        } else {
+            env_vars
+                .entry(OsString::from("LD_LIBRARY_PATH"))
+                .or_insert(lib_path);
         }
     }
 
-    if !env_vars.is_empty() {
-        debug!("Injecting {} nix build env vars", env_vars.len());
-    }
+    debug!("Injecting {} nix build env vars from print-dev-env", env_vars.len());
+    Ok(env_vars)
+}
 
+/// Fallback: build a minimal environment from the resolved NixConfig.
+///
+/// Used when no package name is provided or when nix print-dev-env fails.
+fn get_base_build_env() -> HashMap<OsString, OsString> {
+    let mut env_vars: HashMap<OsString, OsString> = HashMap::new();
+    let nix = crate::nix_config::require();
+
+    env_vars.insert(OsString::from("PYTHONPATH"), OsString::new());
+
+    prepend_env(
+        &mut env_vars,
+        "LIBRARY_PATH",
+        &OsString::from(&nix.library_path),
+    );
+
+    let pkg_config_dir = nix
+        .pkg_config
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let base_path = format!("{}:{}:{}", nix.cc_bin, nix.coreutils_bin, pkg_config_dir);
+    prepend_env(&mut env_vars, "PATH", &OsString::from(&base_path));
+
+    env_vars.insert(
+        OsString::from("PKG_CONFIG"),
+        OsString::from(&nix.pkg_config),
+    );
+
+    debug!("Injecting {} base nix build env vars", env_vars.len());
     env_vars
 }
 
@@ -173,12 +151,24 @@ fn prepend_env(env_vars: &mut HashMap<OsString, OsString>, key: &str, value: &Os
     env_vars.insert(key, new_value);
 }
 
-/// Resolved per-package build paths.
-struct PackageBuildPaths {
-    library_path: String,
-    include_path: String,
-    pkg_config_path: String,
-    bin_path: String,
+/// Return the platform-specific `PKG_CONFIG_PATH_<triple>` key that nix's
+/// pkg-config wrapper expects (e.g., `PKG_CONFIG_PATH_arm64_apple_darwin`).
+fn pkg_config_platform_key() -> Option<&'static str> {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    { Some("PKG_CONFIG_PATH_arm64_apple_darwin") }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    { Some("PKG_CONFIG_PATH_x86_64_apple_darwin") }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    { Some("PKG_CONFIG_PATH_x86_64_unknown_linux_gnu") }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    { Some("PKG_CONFIG_PATH_aarch64_unknown_linux_gnu") }
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+    )))]
+    { None }
 }
 
 /// Build the effective libs and build-tools for a package.
@@ -238,31 +228,21 @@ fn build_effective_entry(
     (libs, build_tools)
 }
 
-/// Resolve build environment paths for a specific package.
+/// Resolve a full build environment for a package via `nix print-dev-env`.
 ///
-/// Looks up the package in the embedded registry, merges with custom config,
-/// resolves via nix-build (with caching in ~/.cache/uv-nix/), and returns the paths.
-fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
-    let cwd = env::current_dir().ok()?;
+/// Uses `buildPythonPackage` with `inputsFrom` to get the complete set of
+/// environment variables that Nix provides — CC wrapper, PKG_CONFIG_PATH,
+/// NIX_LDFLAGS, NIX_CFLAGS_COMPILE, etc.
+fn resolve_package_dev_env(package_name: &str) -> anyhow::Result<nixpkgs::ResolvedBuildEnv> {
+    let cwd = env::current_dir()?;
     let project_dir = crate::nix_config::find_project_root(&cwd).unwrap_or(cwd);
     let uv_nix_config = crate::config::find_config(&project_dir)
         .map(|(c, _)| c)
         .unwrap_or_default();
 
-    // Get custom config if any
     let custom_config = uv_nix_config.get_package_config(package_name);
-
-    // Build effective entry by merging defaults + custom config
     let (libs, build_tools) = build_effective_entry(package_name, custom_config);
 
-    // Collect all attrs to resolve
-    let all_attrs: Vec<String> = libs.iter().chain(build_tools.iter()).cloned().collect();
-
-    if all_attrs.is_empty() {
-        return None;
-    }
-
-    // Determine nixpkgs source (per-package override or project default)
     let source = if let Some(ref custom_nixpkgs) = custom_config.and_then(|c| c.nixpkgs.as_ref()) {
         nixpkgs::NixpkgsSource::ExplicitPin {
             flake_ref: custom_nixpkgs.to_string(),
@@ -272,57 +252,39 @@ fn resolve_package_build_env(package_name: &str) -> Option<PackageBuildPaths> {
     };
     let nixpkgs_key = nixpkgs::nixpkgs_cache_key(&source);
 
-    // Cache key: hash of version + nixpkgs + package name + effective entry
     let entry_json = serde_json::to_string(&(&libs, &build_tools)).unwrap_or_default();
     let cache_key = {
         let mut hasher = Sha256::new();
-        hasher.update(b"pkg-v2\0"); // Bump version for new format
+        hasher.update(b"dev-env-v1\0");
         hasher.update(nixpkgs_key.as_bytes());
         hasher.update(b"\0");
         hasher.update(package_name.as_bytes());
         hasher.update(b"\0");
         hasher.update(entry_json.as_bytes());
-        format!("pkg-{:x}", hasher.finalize())
+        format!("dev-env-{:x}", hasher.finalize())
     };
 
-    // Check cache
-    if let Some(cached) = load_package_cache(&cache_key) {
-        debug!("Cache hit for package build env: {package_name}");
-        return Some(cached);
-    }
-
-    // Cache miss — resolve via nix-build
-    crate::status("Resolving", &format!("build deps for {package_name}"));
-    debug!(
-        "Resolving package build env for {package_name}: libs={:?}, build-tools={:?}",
-        libs, build_tools
-    );
-
-    match nixpkgs::resolve_build_paths(&all_attrs, &source) {
-        Ok(resolved) => {
-            // Cache the result
-            if let Err(err) = save_package_cache(&cache_key, &resolved) {
-                warn!("Failed to cache package build env for {package_name}: {err}");
-            }
-
-            let result = PackageBuildPaths {
-                library_path: resolved.library_path,
-                include_path: resolved.include_path,
-                pkg_config_path: resolved.pkg_config_path,
-                bin_path: resolved.bin_path,
-            };
-            crate::status("Resolved", &format!("build deps for {package_name}"));
-            Some(result)
-        }
-        Err(err) => {
-            warn!("Failed to resolve package build env for {package_name}: {err}");
-            None
+    // Check cache (skip if UV_NIX_NO_CACHE is set)
+    if env::var_os("UV_NIX_NO_CACHE").is_none() {
+        if let Some(cached) = load_dev_env_cache(&cache_key) {
+            debug!("Cache hit for dev env: {package_name}");
+            return Ok(cached);
         }
     }
+
+    crate::status("Resolving", &format!("build env for {package_name}"));
+
+    let env = nixpkgs::resolve_build_env(&libs, &build_tools, package_name, &source)?;
+
+    if let Err(err) = save_dev_env_cache(&cache_key, &env) {
+        warn!("Failed to write dev env cache for {package_name}: {err}");
+    }
+    crate::status("Resolved", &format!("build env for {package_name}"));
+    Ok(env)
 }
 
-/// Load cached package build paths from ~/.cache/uv-nix/<key>.json.
-fn load_package_cache(cache_key: &str) -> Option<PackageBuildPaths> {
+/// Load cached dev env from ~/.cache/uv-nix/<key>.json.
+fn load_dev_env_cache(cache_key: &str) -> Option<nixpkgs::ResolvedBuildEnv> {
     let cache_dir = std::env::var_os("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))?
@@ -330,18 +292,14 @@ fn load_package_cache(cache_key: &str) -> Option<PackageBuildPaths> {
 
     let path = cache_dir.join(format!("{cache_key}.json"));
     let content = std::fs::read_to_string(&path).ok()?;
-    let resolved: nixpkgs::ResolvedBuildPaths = serde_json::from_str(&content).ok()?;
-
-    Some(PackageBuildPaths {
-        library_path: resolved.library_path,
-        include_path: resolved.include_path,
-        pkg_config_path: resolved.pkg_config_path,
-        bin_path: resolved.bin_path,
-    })
+    serde_json::from_str(&content).ok()
 }
 
-/// Save package build paths to ~/.cache/uv-nix/<key>.json.
-fn save_package_cache(cache_key: &str, paths: &nixpkgs::ResolvedBuildPaths) -> anyhow::Result<()> {
+/// Save dev env to ~/.cache/uv-nix/<key>.json.
+fn save_dev_env_cache(
+    cache_key: &str,
+    env: &nixpkgs::ResolvedBuildEnv,
+) -> anyhow::Result<()> {
     let cache_dir = std::env::var_os("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
@@ -350,57 +308,12 @@ fn save_package_cache(cache_key: &str, paths: &nixpkgs::ResolvedBuildPaths) -> a
 
     std::fs::create_dir_all(&cache_dir)?;
     let path = cache_dir.join(format!("{cache_key}.json"));
-    let content = serde_json::to_string_pretty(paths)?;
+    let content = serde_json::to_string_pretty(env)?;
     std::fs::write(&path, content)?;
-    debug!("Cached package build env at {}", path.display());
+    debug!("Cached dev env at {}", path.display());
     Ok(())
 }
 
-/// Resolve extra build paths from `[tool.uv-nix]` in pyproject.toml (CWD search).
-fn resolve_extra_build_paths() -> Option<nixpkgs::ResolvedBuildPaths> {
-    let cwd = env::current_dir().ok()?;
-    let (uv_nix_config, project_dir) = crate::config::find_config(&cwd)?;
-
-    // Get libraries filtered for current system
-    let libs = uv_nix_config.extra_libraries_for_system(crate::current_system());
-
-    if libs.is_empty() {
-        return None;
-    }
-
-    debug!("Found {} extra libraries for build env", libs.len());
-
-    let source = nixpkgs::resolve_nixpkgs(&project_dir, &uv_nix_config);
-    let nix_key = nixpkgs::nixpkgs_cache_key(&source);
-
-    // Check cache first
-    let cache_key = format!("build-paths:{nix_key}");
-    if let Some(cached) = crate::cache::lookup(&project_dir, &cache_key, &libs) {
-        // Cached value is JSON-serialized ResolvedBuildPaths
-        if let Ok(paths) = serde_json::from_str::<nixpkgs::ResolvedBuildPaths>(&cached) {
-            return Some(paths);
-        }
-    }
-
-    // Cache miss — resolve via nix-build
-    debug!("Resolving build paths for {:?}", libs);
-    match nixpkgs::resolve_build_paths(&libs, &source) {
-        Ok(paths) => {
-            debug!("Resolved build paths: {:?}", paths);
-            // Cache as JSON
-            if let Ok(json) = serde_json::to_string(&paths)
-                && let Err(err) = crate::cache::store(&project_dir, &cache_key, &libs, &json)
-            {
-                warn!("Failed to cache resolved build paths: {err}");
-            }
-            Some(paths)
-        }
-        Err(err) => {
-            warn!("Failed to resolve extra libraries for build env: {err}");
-            None
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -519,10 +432,8 @@ mod tests {
 
     #[test]
     fn test_get_nix_build_env_no_vars() {
-        // With no UV_NIX_* vars set, should return empty (or only extras)
-        let env = get_nix_build_env(None);
-        // In test context, UV_NIX_* vars are not set, so result depends on CWD
-        // At minimum, the function should not panic
-        assert!(env.len() < 100); // sanity check
+        // With no package name, returns base build env
+        let env = get_nix_build_env(None).unwrap_or_default();
+        assert!(env.len() < 100);
     }
 }

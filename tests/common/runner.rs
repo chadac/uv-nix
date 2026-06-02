@@ -121,9 +121,14 @@ fn test_package_impl(
 
     // Build install command (use -v for debug output in CI)
     let mut install = Command::new(UV_BIN.as_path());
-    install.args(["pip", "install", "-v", "--python", python.to_str().unwrap()]);
+    install.args(["pip", "install", "-v", "--reinstall", "--python", python.to_str().unwrap()]);
+    // Bypass uv-nix build env cache so tests always exercise the full resolution path
+    install.env("UV_NIX_NO_CACHE", "1");
     if no_binary {
         install.args(["--no-binary", package]);
+        // Disable uv's sdist build cache for source builds — cached wheels may
+        // have been compiled against a different nixpkgs and contain stale paths.
+        install.arg("--no-cache");
     }
     install.arg(package);
 
@@ -136,7 +141,11 @@ fn test_package_impl(
             skipped: false,
             skip_reason: None,
             stdout: String::from_utf8_lossy(&install_out.stdout).to_string(),
-            stderr: format!("Install failed:\n{install_stderr}"),
+            stderr: format!(
+                "Install failed (exit code {}):\n\n--- stderr (last 200 lines) ---\n{}",
+                install_out.status.code().unwrap_or(-1),
+                install_stderr.lines().rev().take(200).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+            ),
         };
     }
 
