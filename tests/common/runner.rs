@@ -19,24 +19,23 @@ static TEST_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     dir
 });
 
-/// Shared venv for wheel tests (created once)
-pub static SHARED_VENV: LazyLock<PathBuf> = LazyLock::new(|| {
-    let venv_path = TEST_DIR.join("shared-venv");
+/// Create (or reuse) a per-package venv for isolated testing.
+fn get_package_venv(package: &str) -> PathBuf {
+    let slug = package.replace(['[', ']', ' '], "_");
+    let venv_path = TEST_DIR.join(format!("venv-{slug}"));
 
-    // If venv already exists and is valid, reuse it
     if venv_path.join("bin/python").exists() {
         return venv_path;
     }
 
-    // Create new venv
     let status = Command::new(UV_BIN.as_path())
         .args(["venv", venv_path.to_str().unwrap()])
         .status()
-        .expect("Failed to create shared venv");
+        .expect("Failed to create venv");
 
-    assert!(status.success(), "venv creation failed");
+    assert!(status.success(), "venv creation failed for {package}");
     venv_path
-});
+}
 
 /// Result of a package test
 #[derive(Debug)]
@@ -53,7 +52,7 @@ pub struct TestResult {
 /// Uses `uv pip install --dry-run --only-binary :all:` to check if uv would
 /// download a wheel. If it would fall back to source, this returns None.
 pub fn check_wheel_available(package: &str) -> Option<String> {
-    let venv = SHARED_VENV.as_path();
+    let venv = get_package_venv(package);
     let python = venv.join("bin/python");
 
     // Use --dry-run with --only-binary to check if a wheel exists
@@ -105,7 +104,7 @@ fn test_package_impl(
     no_binary: bool,
     require_wheel: bool,
 ) -> TestResult {
-    let venv = SHARED_VENV.as_path();
+    let venv = get_package_venv(package);
     let python = venv.join("bin/python");
 
     // Check wheel availability if required
@@ -121,7 +120,7 @@ fn test_package_impl(
 
     // Build install command (use -v for debug output in CI)
     let mut install = Command::new(UV_BIN.as_path());
-    install.args(["pip", "install", "-v", "--reinstall", "--python", python.to_str().unwrap()]);
+    install.args(["pip", "install", "-v", "--python", python.to_str().unwrap()]);
     // Bypass uv-nix build env cache so tests always exercise the full resolution path
     install.env("UV_NIX_NO_CACHE", "1");
     if no_binary {

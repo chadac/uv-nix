@@ -1,8 +1,8 @@
 diff --git a/crates/uv-dispatch/Cargo.toml b/crates/uv-dispatch/Cargo.toml
-index 5bb1024b4..fd72217fa 100644
+index 06b128e..7913063 100644
 --- a/crates/uv-dispatch/Cargo.toml
 +++ b/crates/uv-dispatch/Cargo.toml
-@@ -27,6 +27,7 @@ uv-distribution-types = { workspace = true }
+@@ -29,6 +29,7 @@ uv-errors = { workspace = true }
  uv-git = { workspace = true }
  uv-install-wheel = { workspace = true }
  uv-installer = { workspace = true }
@@ -11,17 +11,18 @@ index 5bb1024b4..fd72217fa 100644
  uv-preview = { workspace = true }
  uv-pypi-types = { workspace = true }
 diff --git a/crates/uv-dispatch/src/lib.rs b/crates/uv-dispatch/src/lib.rs
-index 365b33439..570bd83e8 100644
+index 5ee6daf..2de20ad 100644
 --- a/crates/uv-dispatch/src/lib.rs
 +++ b/crates/uv-dispatch/src/lib.rs
-@@ -467,6 +467,16 @@ impl BuildContext for BuildDispatch<'_> {
-
+@@ -540,6 +540,17 @@ impl BuildContext for BuildDispatch<'_> {
+ 
          // Get package-specific environment variables if available.
          let mut environment_variables = self.build_extra_env_vars.clone();
 +
 +        // Inject Nix build environment (headers, libraries, pkg-config) for NixOS.
 +        let nix_build_vars = uv_nix::build_env::get_nix_build_env(
-+            dist_name.map(|n| n.as_str())
++            dist_name.map(|n| n.as_str()),
++            Some(source),
 +        ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other,
 +            format!("uv-nix: failed to resolve build environment: {e}")))?;
 +        for (key, value) in nix_build_vars {

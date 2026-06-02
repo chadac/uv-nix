@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 UV_DIR="$PROJECT_DIR/uv"
-STAMP_FILE="$UV_DIR/crates/uv-nix/.applied"
 UV_VERSION="$(jq -r .version "$PROJECT_DIR/data/uv.json")"
 
 # Clone uv if missing, or fetch if version doesn't match
@@ -24,26 +23,7 @@ else
     fi
 fi
 
-# Check if any source files are newer than the stamp
-needs_update=false
-if [ ! -f "$STAMP_FILE" ]; then
-    needs_update=true
-else
-    for f in "$PROJECT_DIR/Cargo.toml" \
-             "$PROJECT_DIR/data/"* \
-             "$PROJECT_DIR/src/"* \
-             "$PROJECT_DIR/patches/"*.patch; do
-        if [ "$f" -nt "$STAMP_FILE" ]; then
-            needs_update=true
-            break
-        fi
-    done
-fi
-
-if [ "$needs_update" = false ]; then
-    exit 0
-fi
-
+# Always reset to clean state
 echo "==> Resetting uv to clean state..."
 cd "$UV_DIR"
 git checkout .
@@ -67,5 +47,4 @@ done
 
 bash "$SCRIPT_DIR/update-lockfile.sh"
 
-touch "$STAMP_FILE"
 echo "==> Done."

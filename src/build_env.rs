@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -32,12 +33,18 @@ pub struct EffectivePackageConfig {
 ///
 /// When `package_name` is provided, also resolves that package's specific
 /// dependencies from package-build-libs.json on demand (with caching).
-pub fn get_nix_build_env(package_name: Option<&str>) -> anyhow::Result<HashMap<OsString, OsString>> {
+///
+/// `source_dir` is the unpacked sdist directory — used to detect Rust MSRV
+/// from Cargo.toml when the package requires cargo.
+pub fn get_nix_build_env(
+    package_name: Option<&str>,
+    source_dir: Option<&Path>,
+) -> anyhow::Result<HashMap<OsString, OsString>> {
     let Some(name) = package_name else {
         return Ok(get_base_build_env());
     };
 
-    let dev_env = resolve_package_dev_env(name)?;
+    let dev_env = resolve_package_dev_env(name, source_dir)?;
     let mut env_vars: HashMap<OsString, OsString> = HashMap::new();
     for (key, value) in &dev_env.vars {
         env_vars.insert(OsString::from(key), OsString::from(value));
@@ -233,7 +240,13 @@ fn build_effective_entry(
 /// Uses `buildPythonPackage` with `inputsFrom` to get the complete set of
 /// environment variables that Nix provides — CC wrapper, PKG_CONFIG_PATH,
 /// NIX_LDFLAGS, NIX_CFLAGS_COMPILE, etc.
-fn resolve_package_dev_env(package_name: &str) -> anyhow::Result<nixpkgs::ResolvedBuildEnv> {
+///
+/// When `source_dir` is provided and the package requires cargo, detects MSRV
+/// from Cargo.toml and resolves a newer Rust toolchain via rust-overlay if needed.
+fn resolve_package_dev_env(
+    package_name: &str,
+    source_dir: Option<&Path>,
+) -> anyhow::Result<nixpkgs::ResolvedBuildEnv> {
     let cwd = env::current_dir()?;
     let project_dir = crate::nix_config::find_project_root(&cwd).unwrap_or(cwd);
     let uv_nix_config = crate::config::find_config(&project_dir)
@@ -252,15 +265,28 @@ fn resolve_package_dev_env(package_name: &str) -> anyhow::Result<nixpkgs::Resolv
     };
     let nixpkgs_key = nixpkgs::nixpkgs_cache_key(&source);
 
+    // Check if this package needs a newer Rust toolchain
+    let rust_toolchain = if build_tools.contains(&"cargo".to_string()) {
+        resolve_rust_if_needed(source_dir, &source, &project_dir)?
+    } else {
+        None
+    };
+
     let entry_json = serde_json::to_string(&(&libs, &build_tools)).unwrap_or_default();
+    let rust_key = rust_toolchain
+        .as_ref()
+        .map(|t| t.bin_path.to_string_lossy().to_string())
+        .unwrap_or_default();
     let cache_key = {
         let mut hasher = Sha256::new();
-        hasher.update(b"dev-env-v1\0");
+        hasher.update(b"dev-env-v2\0");
         hasher.update(nixpkgs_key.as_bytes());
         hasher.update(b"\0");
         hasher.update(package_name.as_bytes());
         hasher.update(b"\0");
         hasher.update(entry_json.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(rust_key.as_bytes());
         format!("dev-env-{:x}", hasher.finalize())
     };
 
@@ -274,13 +300,58 @@ fn resolve_package_dev_env(package_name: &str) -> anyhow::Result<nixpkgs::Resolv
 
     crate::status("Resolving", &format!("build env for {package_name}"));
 
-    let env = nixpkgs::resolve_build_env(&libs, &build_tools, package_name, &source)?;
+    let mut env = nixpkgs::resolve_build_env(&libs, &build_tools, package_name, &source)?;
+
+    // If we resolved a rust-overlay toolchain, prepend its bin to PATH
+    if let Some(ref toolchain) = rust_toolchain {
+        let toolchain_bin = toolchain.bin_path.to_string_lossy().to_string();
+        if let Some(path) = env.vars.get_mut("PATH") {
+            *path = format!("{toolchain_bin}:{path}");
+        } else {
+            env.vars.insert("PATH".to_string(), toolchain_bin.clone());
+        }
+        crate::status("Using", &format!("rust-overlay toolchain at {}", toolchain.bin_path.display()));
+    }
 
     if let Err(err) = save_dev_env_cache(&cache_key, &env) {
         warn!("Failed to write dev env cache for {package_name}: {err}");
     }
     crate::status("Resolved", &format!("build env for {package_name}"));
     Ok(env)
+}
+
+/// Check if a Rust-based package needs a newer toolchain than nixpkgs provides.
+/// Returns the resolved toolchain if an upgrade is needed, None if no Cargo.toml found.
+fn resolve_rust_if_needed(
+    source_dir: Option<&Path>,
+    nixpkgs_source: &nixpkgs::NixpkgsSource,
+    project_dir: &std::path::Path,
+) -> anyhow::Result<Option<crate::rust_overlay::ResolvedRustToolchain>> {
+    let Some(source_dir) = source_dir else {
+        return Ok(None);
+    };
+    debug!("Checking for Cargo.toml MSRV in: {}", source_dir.display());
+    let Some(msrv) = crate::rust_overlay::detect_msrv(source_dir) else {
+        return Ok(None);
+    };
+
+    crate::status("Detected", &format!("rust-version = {msrv} from Cargo.toml"));
+
+    let nixpkgs_rustc = crate::rust_overlay::nixpkgs_rustc_version(nixpkgs_source)?;
+    debug!("nixpkgs rustc: {nixpkgs_rustc}");
+
+    match crate::rust_overlay::check_rust_requirement(&msrv, &nixpkgs_rustc) {
+        crate::rust_overlay::RustRequirement::Satisfied => {
+            debug!("nixpkgs rustc {nixpkgs_rustc} satisfies MSRV {msrv}");
+            Ok(None)
+        }
+        crate::rust_overlay::RustRequirement::NeedsOverlay { msrv } => {
+            let toolchain = crate::rust_overlay::resolve_rust_toolchain(
+                &msrv, nixpkgs_source, project_dir,
+            )?;
+            Ok(Some(toolchain))
+        }
+    }
 }
 
 /// Load cached dev env from ~/.cache/uv-nix/<key>.json.
@@ -433,7 +504,7 @@ mod tests {
     #[test]
     fn test_get_nix_build_env_no_vars() {
         // With no package name, returns base build env
-        let env = get_nix_build_env(None).unwrap_or_default();
+        let env = get_nix_build_env(None, None).unwrap_or_default();
         assert!(env.len() < 100);
     }
 }

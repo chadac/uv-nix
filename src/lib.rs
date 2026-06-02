@@ -15,6 +15,7 @@ pub mod nix_config;
 pub mod nixgen;
 pub mod nixpkgs;
 pub mod patchelf;
+pub mod rust_overlay;
 pub mod soname;
 
 /// Returns the Nix system string for the current platform (e.g., "x86_64-linux", "aarch64-darwin").
