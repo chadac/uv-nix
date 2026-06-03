@@ -13,7 +13,7 @@ build:
         $(find patches/ -type f -name '*.patch') \
         data/uv.json \
         -- \
-        bash -c 'bash scripts/apply-patches.sh && cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"'
+        bash -c 'set -x && bash scripts/apply-patches.sh && cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"'
 
 # Install optimized binary to ~/.local/bin
 # Uses uv's "fast-build" profile (opt-level=1, no LTO) for much faster builds
