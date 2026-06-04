@@ -582,6 +582,7 @@ dependencies = [
  "console",
  "owo-colors",
  "rayon",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

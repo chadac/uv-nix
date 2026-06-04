@@ -122,7 +122,7 @@
     "build-tools": ["cargo", "cmake"]
   },
   "psycopg2": {
-    "libs": ["libpq"],
+    "libs": ["libpq", "openssl"],
     "build-tools": ["libpq.pg_config"]
   },
   "psycopg2-binary": {
@@ -208,7 +208,8 @@
     "libs": ["blas", "gfortran.cc.lib"]
   },
   "scipy": {
-    "libs": ["blas", "lapack", "xsimd", "boost188", "qhull"]
+    "libs": ["openblas", "xsimd", "boost188", "qhull"],
+    "build-tools": ["gfortran", "cmake"]
   },
   "scs": {
     "libs": ["blas"]

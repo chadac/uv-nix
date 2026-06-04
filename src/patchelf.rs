@@ -20,6 +20,8 @@ pub struct PatchConfig {
     pub rpath: Vec<PathBuf>,
     /// True if running on Darwin/macOS.
     pub is_darwin: bool,
+    /// Extra path prefixes considered safe on macOS (not rewritten).
+    pub safe_prefixes: Vec<String>,
 }
 
 impl PatchConfig {
@@ -33,6 +35,9 @@ impl PatchConfig {
         } else {
             Some(nix.interpreter.clone())
         };
+
+        let safe_prefixes = load_safe_prefixes();
+
         Self {
             patcher: nix.patcher.clone(),
             interpreter,
@@ -43,6 +48,7 @@ impl PatchConfig {
                 .map(PathBuf::from)
                 .collect(),
             is_darwin: nix.is_darwin,
+            safe_prefixes,
         }
     }
 
@@ -68,6 +74,7 @@ impl PatchConfig {
             interpreter: interp,
             rpath: rpath_entries,
             is_darwin: base.is_darwin,
+            safe_prefixes: base.safe_prefixes,
         }
     }
 
@@ -284,17 +291,21 @@ fn patch_elf_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run `install_name_tool` on a single Mach-O binary to add rpath entries.
+/// Patch a Mach-O binary by rewriting non-system library references to nix store paths.
 ///
-/// On macOS, libraries reference dependencies by install name. We add rpath
-/// entries so the dynamic linker can find Nix store libraries.
+/// For each linked library:
+/// - System references (`/usr/lib/*`, `/System/Library/*`) are left alone
+/// - Relative references (`@loader_path/*`, `@rpath/*`, `@executable_path/*`) are left alone
+/// - References already in `/nix/store/` are left alone
+/// - Everything else is rewritten via `install_name_tool -change` to the nix store equivalent
+///
+/// Also adds rpaths for any `@rpath/`-based references.
 fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
     if config.rpath.is_empty() {
         return Ok(());
     }
 
     // Check if already patched by scanning the binary for /nix/store strings.
-    // This avoids spawning otool (which costs ~70ms per call on macOS).
     if let Ok(bytes) = fs::read(path)
         && bytes.windows(11).any(|w| w == b"/nix/store/")
     {
@@ -302,18 +313,46 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Deduplicate rpath entries to avoid "specified more than once" errors.
-    let unique_rpaths: Vec<&PathBuf> = {
-        let mut seen = std::collections::HashSet::new();
-        config.rpath.iter().filter(|p| seen.insert(*p)).collect()
-    };
+    let refs = get_macho_references(path)?;
 
-    // Add all rpath entries in a single install_name_tool invocation.
-    // install_name_tool supports multiple -add_rpath flags at once, which
-    // avoids spawning one process per rpath entry.
+    let mut changes: Vec<(String, String)> = Vec::new();
+    let mut has_rpath_refs = false;
+
+    for ref_path in &refs {
+        if ref_path.starts_with("@rpath/") {
+            has_rpath_refs = true;
+            continue;
+        }
+        if is_safe_reference(ref_path, &config.safe_prefixes) {
+            continue;
+        }
+        if let Some(nix_path) = find_in_rpath_dirs(ref_path, &config.rpath) {
+            changes.push((ref_path.clone(), nix_path));
+        } else {
+            anyhow::bail!(
+                "Non-system library reference in {} cannot be resolved: {}\n\
+                 Add the library to [tool.uv-nix] extra-libraries or safe-prefixes in pyproject.toml",
+                path.display(),
+                ref_path
+            );
+        }
+    }
+
+    if changes.is_empty() && !has_rpath_refs {
+        return Ok(());
+    }
+
     let mut cmd = Command::new(&config.patcher);
-    for rpath_entry in &unique_rpaths {
-        cmd.arg("-add_rpath").arg(rpath_entry);
+    for (old, new) in &changes {
+        cmd.arg("-change").arg(old).arg(new);
+    }
+    if has_rpath_refs {
+        let mut seen = std::collections::HashSet::new();
+        for rpath_entry in &config.rpath {
+            if seen.insert(rpath_entry) {
+                cmd.arg("-add_rpath").arg(rpath_entry);
+            }
+        }
     }
     cmd.arg(path);
     debug!("Running: {:?}", cmd);
@@ -322,31 +361,26 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let msg = stderr.trim();
-        // "would duplicate path" means some rpaths already exist, which is fine
-        if msg.contains("would duplicate path") {
-            debug!(
-                "Some rpaths already exist in {}, adding individually",
-                path.display()
-            );
-            // Fall back to one-at-a-time to skip duplicates
-            for rpath_entry in &config.rpath {
-                let mut single = Command::new(&config.patcher);
-                single.arg("-add_rpath").arg(rpath_entry).arg(path);
-                let out = single.output()?;
-                if !out.status.success() {
-                    let err = String::from_utf8_lossy(&out.stderr);
-                    if !err.contains("would duplicate path") {
-                        warn!(
-                            "install_name_tool -add_rpath failed on {}: {}",
-                            path.display(),
-                            err.trim()
-                        );
-                    }
-                }
+        if msg.contains("would duplicate path") && changes.is_empty() {
+            debug!("Rpaths already exist in {}, skipping", path.display());
+        } else if msg.contains("would duplicate path") {
+            let mut cmd2 = Command::new(&config.patcher);
+            for (old, new) in &changes {
+                cmd2.arg("-change").arg(old).arg(new);
+            }
+            cmd2.arg(path);
+            let out2 = cmd2.output()?;
+            if !out2.status.success() {
+                let err = String::from_utf8_lossy(&out2.stderr);
+                anyhow::bail!(
+                    "install_name_tool -change failed on {}: {}",
+                    path.display(),
+                    err.trim()
+                );
             }
         } else {
-            warn!(
-                "install_name_tool -add_rpath failed on {}: {}",
+            anyhow::bail!(
+                "install_name_tool failed on {}: {}",
                 path.display(),
                 msg
             );
@@ -374,6 +408,7 @@ pub fn patch_binary_targeted(
         interpreter: config.interpreter.clone(),
         rpath: rpaths.to_vec(),
         is_darwin: config.is_darwin,
+        safe_prefixes: config.safe_prefixes.clone(),
     };
     if config.is_darwin {
         patch_macho_binary(path, &targeted)
@@ -424,16 +459,119 @@ fn ensure_origin_rpath(path: &Path, config: &PatchConfig) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Parse `otool -L` output to get the list of linked library paths.
+///
+/// The first entry is always the library's own install name (LC_ID_DYLIB),
+/// so we skip it unconditionally.
+fn get_macho_references(path: &Path) -> anyhow::Result<Vec<String>> {
+    let output = Command::new("otool").arg("-L").arg(path).output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "otool -L failed on {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut refs = Vec::new();
+    let mut first = true;
+
+    for line in stdout.lines().skip(1) {
+        let trimmed = line.trim();
+        let ref_path = if let Some(pos) = trimmed.find(" (compatibility") {
+            &trimmed[..pos]
+        } else if let Some(pos) = trimmed.find(" (") {
+            &trimmed[..pos]
+        } else {
+            continue;
+        };
+
+        // First entry is always the library's own install name (LC_ID_DYLIB)
+        if first {
+            first = false;
+            continue;
+        }
+
+        refs.push(ref_path.to_string());
+    }
+
+    Ok(refs)
+}
+
+/// Check if a library reference is safe (should not be rewritten).
+fn is_safe_reference(path: &str, extra_safe_prefixes: &[String]) -> bool {
+    const BUILTIN_SAFE_PREFIXES: &[&str] = &[
+        "/usr/lib/",
+        "/System/Library/",
+        "@loader_path/",
+        "@rpath/",
+        "@executable_path/",
+        "/nix/store/",
+        "/DLC/",
+    ];
+
+    for prefix in BUILTIN_SAFE_PREFIXES {
+        if path.starts_with(prefix) {
+            return true;
+        }
+    }
+    for prefix in extra_safe_prefixes {
+        if path.starts_with(prefix.as_str()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Search rpath directories for a library matching the given reference.
+fn find_in_rpath_dirs(ref_path: &str, rpath_dirs: &[PathBuf]) -> Option<String> {
+    let filename = Path::new(ref_path).file_name()?.to_str()?;
+    for dir in rpath_dirs {
+        let candidate = dir.join(filename);
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+/// Load safe prefixes from project config, if available.
+fn load_safe_prefixes() -> Vec<String> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let project_dir = crate::nix_config::find_project_root(&cwd).unwrap_or(cwd);
+    crate::config::find_config(&project_dir)
+        .map(|(c, _)| c.safe_prefixes)
+        .unwrap_or_default()
+}
+
 /// Patch a list of native binaries (platform-aware).
 ///
 /// This is the core patching loop, separated from directory scanning
-/// so callers can time each stage independently.
-pub fn patch_binaries(binaries: &[PathBuf], config: &PatchConfig) {
-    binaries.par_iter().for_each(|binary| {
-        if let Err(err) = patch_binary(binary, config) {
-            warn!("Failed to patch {}: {err}", binary.display());
-        }
+/// so callers can time each stage independently. Collects all errors
+/// and returns the first one encountered (after attempting all binaries).
+///
+/// Uses a local rayon thread pool to avoid conflicts with the host
+/// application's global pool configuration.
+pub fn patch_binaries(binaries: &[PathBuf], config: &PatchConfig) -> anyhow::Result<()> {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .build()
+        .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap());
+
+    let errors: Vec<_> = pool.install(|| {
+        binaries
+            .par_iter()
+            .filter_map(|binary| patch_binary(binary, config).err().map(|e| (binary, e)))
+            .collect()
     });
+
+    if let Some((path, err)) = errors.first() {
+        if errors.len() > 1 {
+            warn!("{} additional binaries failed to patch", errors.len() - 1);
+        }
+        anyhow::bail!("Failed to patch {}: {err}", path.display());
+    }
+    Ok(())
 }
 
 /// Patch all native binaries found in a directory (platform-aware).
@@ -449,6 +587,5 @@ pub fn patch_directory(dir: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         binary_type,
         dir.display()
     );
-    patch_binaries(&binaries, config);
-    Ok(())
+    patch_binaries(&binaries, config)
 }

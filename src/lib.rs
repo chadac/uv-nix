@@ -15,6 +15,7 @@ pub mod nix_config;
 pub mod nixgen;
 pub mod nixpkgs;
 pub mod patchelf;
+pub mod rust_overlay;
 pub mod soname;
 
 /// Returns the Nix system string for the current platform (e.g., "x86_64-linux", "aarch64-darwin").
@@ -169,11 +170,11 @@ fn timing_enabled() -> bool {
 ///
 /// When `UV_NIX_TIMING=1` is set, emits a structured timing line to stderr:
 /// `uv-nix-timing: nix_resolve=Xms find_binaries=Xms (N files) patch=Xms total=Xms`
-pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
+pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) -> anyhow::Result<()> {
     use std::time::Instant;
 
     if installed_packages.is_empty() {
-        return;
+        return Ok(());
     }
 
     let timing = timing_enabled();
@@ -223,7 +224,7 @@ pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
                 nix_resolve_ms, find_ms, total_ms
             );
         }
-        return;
+        return Ok(());
     }
 
     debug!(
@@ -253,7 +254,7 @@ pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
                 .iter()
                 .flat_map(|p| p.binaries.iter().cloned())
                 .collect();
-            patchelf::patch_binaries(&all_binaries, &patch_config);
+            patchelf::patch_binaries(&all_binaries, &patch_config)?;
             if timing {
                 let total_ms = t_total.elapsed().as_millis();
                 eprintln!(
@@ -265,7 +266,7 @@ pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
                     total_ms
                 );
             }
-            return;
+            return Ok(());
         }
     };
 
@@ -300,6 +301,8 @@ pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) {
             nix_resolve_ms, find_ms, n_binaries, patch_ms, total_ms
         );
     }
+
+    Ok(())
 }
 
 /// Collect native binaries from RECORD files, grouped by package.

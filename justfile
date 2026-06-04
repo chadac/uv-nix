@@ -6,7 +6,6 @@ setup:
 
 # Build the patched uv binary using cargo (fast, for development)
 build:
-    bash scripts/apply-patches.sh
     cached-exec \
         Cargo.toml \
         $(find src/ -type f) \
@@ -14,19 +13,21 @@ build:
         $(find patches/ -type f -name '*.patch') \
         data/uv.json \
         -- \
-        cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
+        bash -c 'set -x && bash scripts/apply-patches.sh && cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"'
 
 # Install optimized binary to ~/.local/bin
 # Uses uv's "fast-build" profile (opt-level=1, no LTO) for much faster builds
 # than --release (which uses fat LTO). Use `just install-release` for full optimization.
-install: build
+install:
+    bash scripts/apply-patches.sh && \
     cargo build --manifest-path uv/Cargo.toml --package uv --profile fast-build --no-default-features --features "uv-distribution/static,test-defaults" && \
     mkdir -p ~/.local/bin && \
     cp uv/target/fast-build/uv ~/.local/bin/uv && \
     echo "Installed uv to ~/.local/bin/uv"
 
 # Install fully optimized release binary (slow build — fat LTO)
-install-release: build
+install-release:
+    bash scripts/apply-patches.sh && \
     cargo build --manifest-path uv/Cargo.toml --package uv --release --no-default-features --features "uv-distribution/static,test-defaults" && \
     mkdir -p ~/.local/bin && \
     cp uv/target/release/uv ~/.local/bin/uv && \
@@ -34,7 +35,6 @@ install-release: build
 
 # Force rebuild (ignores cache)
 build-force:
-    bash scripts/apply-patches.sh
     cached-exec -f \
         Cargo.toml \
         $(find src/ -type f) \
@@ -42,7 +42,7 @@ build-force:
         $(find patches/ -type f -name '*.patch') \
         data/uv.json \
         -- \
-        cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
+        bash -c 'bash scripts/apply-patches.sh && cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"'
 
 # Update data/Cargo.lock from the patched uv workspace
 update-lockfile: build

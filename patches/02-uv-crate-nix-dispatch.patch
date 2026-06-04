@@ -26,7 +26,7 @@ index cbe1da090..3ab300138 100644
 +            .map(|d| format!("{}-{}", d.filename().name.as_dist_info_name(), d.filename().version))
 +            .collect();
 +        for site_packages_dir in venv.site_packages() {
-+            uv_nix::post_install_patch(&site_packages_dir, &nix_dist_prefixes);
++            uv_nix::post_install_patch(&site_packages_dir, &nix_dist_prefixes)?;
 +        }
 +
          logger.on_install(installs.len(), start, printer, DryRun::Disabled)?;
