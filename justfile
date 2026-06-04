@@ -1,5 +1,9 @@
 set shell := ["nix", "develop", "-c", "bash", "-euo", "pipefail", "-c"]
 
+# Clone uv source (used by CI before rust-cache so Cargo.lock exists for cache key)
+clone-uv:
+    bash scripts/clone-uv.sh
+
 # Build the patched uv binary using cargo (fast, for development)
 build:
     cached-exec \
@@ -13,7 +17,7 @@ build:
 
 _build-inner:
     bash scripts/apply-patches.sh
-    cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
+    CARGO_LOG=cargo::core::compiler::fingerprint=info cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
 
 # Install optimized binary to ~/.local/bin
 # Uses uv's "fast-build" profile (opt-level=1, no LTO) for much faster builds

@@ -1,0 +1,27 @@
+name: Setup
+description: Install Nix, cache store, clone uv source, and restore Rust cache
+
+runs:
+  using: composite
+  steps:
+    - uses: cachix/install-nix-action@v31
+      with:
+        extra_nix_config: |
+          max-jobs = auto
+          http-connections = 128
+          max-substitution-jobs = 128
+
+    - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+    - name: Clone uv source
+      shell: bash
+      run: nix develop --command just clone-uv
+
+    - name: Set lockfile for cache key
+      shell: bash
+      run: cp data/Cargo.lock uv/Cargo.lock
+
+    - uses: actions/cache@v4
+      with:
+        path: uv/target/debug
+        key: rust-${{ runner.os }}-${{ hashFiles('data/Cargo.lock') }}
