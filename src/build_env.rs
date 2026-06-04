@@ -54,10 +54,10 @@ pub fn get_nix_build_env(
     // Nix's pkg-config wrapper uses a platform-specific var (e.g.,
     // PKG_CONFIG_PATH_x86_64_unknown_linux_gnu) and ignores PKG_CONFIG_PATH
     // when it's set. Mirror our PKG_CONFIG_PATH into the platform-specific key.
-    if let Some(pkg_path) = env_vars.get(&OsString::from("PKG_CONFIG_PATH")).cloned() {
-        if let Some(key) = pkg_config_platform_key() {
-            env_vars.insert(OsString::from(key), pkg_path);
-        }
+    if let Some(pkg_path) = env_vars.get(&OsString::from("PKG_CONFIG_PATH")).cloned()
+        && let Some(key) = pkg_config_platform_key()
+    {
+        env_vars.insert(OsString::from(key), pkg_path);
     }
 
     // Some packages (h5py) use dlopen() at build time to find libraries.
@@ -73,7 +73,10 @@ pub fn get_nix_build_env(
         }
     }
 
-    debug!("Injecting {} nix build env vars from print-dev-env", env_vars.len());
+    debug!(
+        "Injecting {} nix build env vars from print-dev-env",
+        env_vars.len()
+    );
     Ok(env_vars)
 }
 
@@ -162,20 +165,30 @@ fn prepend_env(env_vars: &mut HashMap<OsString, OsString>, key: &str, value: &Os
 /// pkg-config wrapper expects (e.g., `PKG_CONFIG_PATH_arm64_apple_darwin`).
 fn pkg_config_platform_key() -> Option<&'static str> {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { Some("PKG_CONFIG_PATH_arm64_apple_darwin") }
+    {
+        Some("PKG_CONFIG_PATH_arm64_apple_darwin")
+    }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    { Some("PKG_CONFIG_PATH_x86_64_apple_darwin") }
+    {
+        Some("PKG_CONFIG_PATH_x86_64_apple_darwin")
+    }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    { Some("PKG_CONFIG_PATH_x86_64_unknown_linux_gnu") }
+    {
+        Some("PKG_CONFIG_PATH_x86_64_unknown_linux_gnu")
+    }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    { Some("PKG_CONFIG_PATH_aarch64_unknown_linux_gnu") }
+    {
+        Some("PKG_CONFIG_PATH_aarch64_unknown_linux_gnu")
+    }
     #[cfg(not(any(
         all(target_os = "macos", target_arch = "aarch64"),
         all(target_os = "macos", target_arch = "x86_64"),
         all(target_os = "linux", target_arch = "x86_64"),
         all(target_os = "linux", target_arch = "aarch64"),
     )))]
-    { None }
+    {
+        None
+    }
 }
 
 /// Build the effective libs and build-tools for a package.
@@ -291,11 +304,11 @@ fn resolve_package_dev_env(
     };
 
     // Check cache (skip if UV_NIX_NO_CACHE is set)
-    if env::var_os("UV_NIX_NO_CACHE").is_none() {
-        if let Some(cached) = load_dev_env_cache(&cache_key) {
-            debug!("Cache hit for dev env: {package_name}");
-            return Ok(cached);
-        }
+    if env::var_os("UV_NIX_NO_CACHE").is_none()
+        && let Some(cached) = load_dev_env_cache(&cache_key)
+    {
+        debug!("Cache hit for dev env: {package_name}");
+        return Ok(cached);
     }
 
     crate::status("Resolving", &format!("build env for {package_name}"));
@@ -310,7 +323,10 @@ fn resolve_package_dev_env(
         } else {
             env.vars.insert("PATH".to_string(), toolchain_bin.clone());
         }
-        crate::status("Using", &format!("rust-overlay toolchain at {}", toolchain.bin_path.display()));
+        crate::status(
+            "Using",
+            &format!("rust-overlay toolchain at {}", toolchain.bin_path.display()),
+        );
     }
 
     if let Err(err) = save_dev_env_cache(&cache_key, &env) {
@@ -335,7 +351,10 @@ fn resolve_rust_if_needed(
         return Ok(None);
     };
 
-    crate::status("Detected", &format!("rust-version = {msrv} from Cargo.toml"));
+    crate::status(
+        "Detected",
+        &format!("rust-version = {msrv} from Cargo.toml"),
+    );
 
     let nixpkgs_rustc = crate::rust_overlay::nixpkgs_rustc_version(nixpkgs_source)?;
     debug!("nixpkgs rustc: {nixpkgs_rustc}");
@@ -346,9 +365,8 @@ fn resolve_rust_if_needed(
             Ok(None)
         }
         crate::rust_overlay::RustRequirement::NeedsOverlay { msrv } => {
-            let toolchain = crate::rust_overlay::resolve_rust_toolchain(
-                &msrv, nixpkgs_source, project_dir,
-            )?;
+            let toolchain =
+                crate::rust_overlay::resolve_rust_toolchain(&msrv, nixpkgs_source, project_dir)?;
             Ok(Some(toolchain))
         }
     }
@@ -367,10 +385,7 @@ fn load_dev_env_cache(cache_key: &str) -> Option<nixpkgs::ResolvedBuildEnv> {
 }
 
 /// Save dev env to ~/.cache/uv-nix/<key>.json.
-fn save_dev_env_cache(
-    cache_key: &str,
-    env: &nixpkgs::ResolvedBuildEnv,
-) -> anyhow::Result<()> {
+fn save_dev_env_cache(cache_key: &str, env: &nixpkgs::ResolvedBuildEnv) -> anyhow::Result<()> {
     let cache_dir = std::env::var_os("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
@@ -384,7 +399,6 @@ fn save_dev_env_cache(
     debug!("Cached dev env at {}", path.display());
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

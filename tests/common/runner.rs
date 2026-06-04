@@ -143,7 +143,15 @@ fn test_package_impl(
             stderr: format!(
                 "Install failed (exit code {}):\n\n--- stderr (last 200 lines) ---\n{}",
                 install_out.status.code().unwrap_or(-1),
-                install_stderr.lines().rev().take(200).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+                install_stderr
+                    .lines()
+                    .rev()
+                    .take(200)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
             ),
         };
     }

@@ -6,13 +6,17 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     systems.url = "github:nix-systems/default";
     crane.url = "github:ipetkov/crane";
+    git-hooks = {
+      url = "github:cachix/git-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     cached-exec = {
       url = "github:chadac/cached-exec";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, flake-parts, nixpkgs, systems, crane, cached-exec, ... }@inputs:
+  outputs = { self, flake-parts, nixpkgs, systems, crane, git-hooks, cached-exec, ... }@inputs:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = import systems;
 
@@ -27,6 +31,18 @@
         let
           package = pkgs.callPackage ./. { craneLib = crane.mkLib pkgs; };
           binaries = import ./nix/uv-nix-binaries.nix { inherit pkgs; };
+          pre-commit-check = git-hooks.lib.${system}.run {
+            src = ./.;
+            excludes = [ "^uv/" ];
+            hooks = {
+              rustfmt.enable = true;
+              clippy = {
+                enable = true;
+                settings.allFeatures = true;
+                settings.denyWarnings = true;
+              };
+            };
+          };
         in {
           packages = {
             default = package;
@@ -35,19 +51,25 @@
             bin = binaries.latest;
           } // binaries;
 
+          checks.pre-commit = pre-commit-check;
+
           devShells.default = pkgs.mkShell {
-            buildInputs = [
+            buildInputs = pre-commit-check.enabledPackages ++ [
               pkgs.rustc
               pkgs.cargo
+              pkgs.clippy
+              pkgs.rustfmt
               pkgs.just
               pkgs.python3
-              # Build dependencies for uv
+              pkgs.patchelf
+              pkgs.python3Packages.pytest
+              pkgs.python3Packages.docker
+              pkgs.binutils
               pkgs.bzip2
               pkgs.xz
               pkgs.zstd
               pkgs.openssl
               pkgs.pkg-config
-              # Dev tools
               pkgs.jq
               pkgs.gnused
               cached-exec.packages.${system}.default
@@ -56,9 +78,10 @@
               pkgs.libiconv
             ];
 
+            CARGO_HOME = ".cargo";
             shellHook = ''
-              export CARGO_HOME="$PWD/.cargo"
               export PATH="$PWD/uv/target/debug:$PATH"
+              ${pre-commit-check.shellHook}
             '';
           };
         };

@@ -103,9 +103,7 @@ pub fn check_rust_requirement(msrv: &Version, nixpkgs_version: &Version) -> Rust
     if nixpkgs_version >= msrv {
         RustRequirement::Satisfied
     } else {
-        RustRequirement::NeedsOverlay {
-            msrv: msrv.clone(),
-        }
+        RustRequirement::NeedsOverlay { msrv: msrv.clone() }
     }
 }
 
@@ -141,11 +139,17 @@ pub fn resolve_rust_toolchain(
 
     // Find the minimum stable version that satisfies the MSRV
     let rust_version = find_stable_version(msrv);
-    let rust_version_str = format!("{}.{}.{}", rust_version.major, rust_version.minor, rust_version.patch);
+    let rust_version_str = format!(
+        "{}.{}.{}",
+        rust_version.major, rust_version.minor, rust_version.patch
+    );
 
     crate::status(
         "Resolving",
-        &format!("rust {} via rust-overlay (nixpkgs too old)", rust_version_str),
+        &format!(
+            "rust {} via rust-overlay (nixpkgs too old)",
+            rust_version_str
+        ),
     );
 
     let toolchain = resolve_toolchain_path(&overlay_rev, &rust_version_str, nixpkgs_source)?;
@@ -176,7 +180,11 @@ pub struct ResolvedRustToolchain {
 /// Resolve the latest rev of oxalica/rust-overlay via git ls-remote.
 fn resolve_latest_overlay_rev() -> anyhow::Result<String> {
     let output = std::process::Command::new("git")
-        .args(["ls-remote", "https://github.com/oxalica/rust-overlay", "refs/heads/master"])
+        .args([
+            "ls-remote",
+            "https://github.com/oxalica/rust-overlay",
+            "refs/heads/master",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -214,7 +222,6 @@ fn resolve_toolchain_path(
     nixpkgs_source: &NixpkgsSource,
 ) -> anyhow::Result<ResolvedRustToolchain> {
     let pkgs_expr = crate::nixpkgs::nixpkgs_import_expr(nixpkgs_source);
-    let system = crate::current_system();
 
     // Apply the rust-overlay to the already-resolved nixpkgs. The overlay just
     // adds `rust-bin` to the package set — it doesn't rebuild anything else.
@@ -238,7 +245,10 @@ in pkgs.rust-bin.stable."{rust_version}".default"#
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to build rust toolchain via rust-overlay: {}", stderr.trim());
+        anyhow::bail!(
+            "Failed to build rust toolchain via rust-overlay: {}",
+            stderr.trim()
+        );
     }
 
     let store_path = String::from_utf8(output.stdout)?.trim().to_string();

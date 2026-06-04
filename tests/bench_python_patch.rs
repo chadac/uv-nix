@@ -141,11 +141,7 @@ fn bench_fresh_python_patch() {
     let total_ms = t0.elapsed().as_millis();
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(
-        output.status.success(),
-        "python install failed: {}",
-        stderr
-    );
+    assert!(output.status.success(), "python install failed: {}", stderr);
 
     eprintln!("  Total: {}ms", total_ms);
     eprintln!("  stderr output:");

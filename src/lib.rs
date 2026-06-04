@@ -170,7 +170,10 @@ fn timing_enabled() -> bool {
 ///
 /// When `UV_NIX_TIMING=1` is set, emits a structured timing line to stderr:
 /// `uv-nix-timing: nix_resolve=Xms find_binaries=Xms (N files) patch=Xms total=Xms`
-pub fn post_install_patch(site_packages: &Path, installed_packages: &[String]) -> anyhow::Result<()> {
+pub fn post_install_patch(
+    site_packages: &Path,
+    installed_packages: &[String],
+) -> anyhow::Result<()> {
     use std::time::Instant;
 
     if installed_packages.is_empty() {
