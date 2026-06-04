@@ -494,13 +494,17 @@ pub fn resolve_build_env(
 
     let build_inputs_exprs: String = libs
         .iter()
-        .map(|attr| format!("    (pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)"))
+        .map(|attr| {
+            format!("    (pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)")
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
     let native_build_inputs_exprs: String = build_tools
         .iter()
-        .map(|attr| format!("    (pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)"))
+        .map(|attr| {
+            format!("    (pkgs.lib.getAttrFromPath (pkgs.lib.splitString \".\" \"{attr}\") pkgs)")
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -546,7 +550,10 @@ in pkgs.mkShell {{
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("nix print-dev-env failed for {package_name}: {}", stderr.trim());
+        anyhow::bail!(
+            "nix print-dev-env failed for {package_name}: {}",
+            stderr.trim()
+        );
     }
 
     let json_str = String::from_utf8(output.stdout)?;
@@ -593,14 +600,15 @@ in pkgs.mkShell {{
 
     let mut vars = std::collections::HashMap::new();
     for (key, var) in &parsed.variables {
-        if var.var_type == "exported" && relevant_vars.contains(&key.as_str()) {
-            if let Some(ref val) = var.value {
-                let s = match val {
-                    DevEnvValue::Str(s) => s.clone(),
-                    DevEnvValue::List(v) => v.join(" "),
-                };
-                vars.insert(key.clone(), s);
-            }
+        if var.var_type == "exported"
+            && relevant_vars.contains(&key.as_str())
+            && let Some(ref val) = var.value
+        {
+            let s = match val {
+                DevEnvValue::Str(s) => s.clone(),
+                DevEnvValue::List(v) => v.join(" "),
+            };
+            vars.insert(key.clone(), s);
         }
     }
 

@@ -1,4 +1,4 @@
-name: Compatibility Tests
+name: Checks
 
 on:
   pull_request:
@@ -29,6 +29,16 @@ permissions:
   pull-requests: write
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: cachix/install-nix-action@v31
+
+      - name: Run pre-commit checks
+        run: nix develop --command just lint
+
   test-ubuntu:
     if: >-
       github.event_name != 'workflow_dispatch' ||

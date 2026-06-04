@@ -1,9 +1,5 @@
 set shell := ["nix", "develop", "-c", "bash", "-euo", "pipefail", "-c"]
 
-# Set up git hooks (run once after cloning)
-setup:
-    git config core.hooksPath .githooks
-
 # Build the patched uv binary using cargo (fast, for development)
 build:
     cached-exec \
@@ -13,7 +9,11 @@ build:
         $(find patches/ -type f -name '*.patch') \
         data/uv.json \
         -- \
-        bash -c 'set -x && bash scripts/apply-patches.sh && cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"'
+        just _build-inner
+
+_build-inner:
+    bash scripts/apply-patches.sh
+    cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
 
 # Install optimized binary to ~/.local/bin
 # Uses uv's "fast-build" profile (opt-level=1, no LTO) for much faster builds
@@ -42,7 +42,7 @@ build-force:
         $(find patches/ -type f -name '*.patch') \
         data/uv.json \
         -- \
-        bash -c 'bash scripts/apply-patches.sh && cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"'
+        just _build-inner
 
 # Update data/Cargo.lock from the patched uv workspace
 update-lockfile: build
@@ -52,18 +52,23 @@ update-lockfile: build
 nix-build:
     nix build
 
-# Run formatting and lint checks (used by pre-commit hook)
+# Run pre-commit checks (formatting + clippy)
 lint:
-    cargo fmt -- --check && cargo clippy --all-targets -- -D warnings
+    cargo fetch
+    pre-commit run --all-files
 
 # Auto-format code
 fmt:
-    cargo fmt
+    find src tests -name '*.rs' -exec rustfmt {} +
 
 # Generate data/soname-map.json from current nixpkgs
 generate-soname-map:
     cargo run --features cli --bin generate_soname_map > data/soname-map.json
     echo "Updated data/soname-map.json"
+
+# Fetch crate dependencies (needed before offline clippy/check)
+fetch:
+    cargo fetch
 
 # Check local Rust crate compiles
 check:

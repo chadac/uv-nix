@@ -379,11 +379,7 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
                 );
             }
         } else {
-            anyhow::bail!(
-                "install_name_tool failed on {}: {}",
-                path.display(),
-                msg
-            );
+            anyhow::bail!("install_name_tool failed on {}: {}", path.display(), msg);
         }
     }
 
@@ -554,9 +550,12 @@ fn load_safe_prefixes() -> Vec<String> {
 /// Uses a local rayon thread pool to avoid conflicts with the host
 /// application's global pool configuration.
 pub fn patch_binaries(binaries: &[PathBuf], config: &PatchConfig) -> anyhow::Result<()> {
-    let pool = rayon::ThreadPoolBuilder::new()
-        .build()
-        .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap());
+    let pool = rayon::ThreadPoolBuilder::new().build().unwrap_or_else(|_| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+    });
 
     let errors: Vec<_> = pool.install(|| {
         binaries
