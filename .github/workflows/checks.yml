@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: cachix/install-nix-action@v31
+      - uses: ./.github/actions/setup
 
       - name: Run pre-commit checks
         run: nix develop --command just lint
@@ -49,14 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: cachix/install-nix-action@v31
-
-      - name: Prepare workspace for cache
-        run: mkdir -p uv/target
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "uv -> target"
+      - uses: ./.github/actions/setup
 
       - name: Build patched uv
         run: nix develop --command just build
@@ -82,14 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: cachix/install-nix-action@v31
-
-      - name: Prepare workspace for cache
-        run: mkdir -p uv/target
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "uv -> target"
+      - uses: ./.github/actions/setup
 
       - name: Build patched uv
         run: nix develop --command just build
@@ -111,14 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: cachix/install-nix-action@v31
-
-      - name: Prepare workspace for cache
-        run: mkdir -p uv/target
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "uv -> target"
+      - uses: ./.github/actions/setup
 
       - name: Build patched uv
         run: nix develop --command just build
@@ -141,14 +120,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: cachix/install-nix-action@v31
-
-      - name: Prepare workspace for cache
-        run: mkdir -p uv/target
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "uv -> target"
+      - uses: ./.github/actions/setup
 
       - name: Build patched uv
         run: nix develop --command just build
@@ -215,4 +187,3 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body-path: /tmp/comment-body.md
           edit-mode: replace
-

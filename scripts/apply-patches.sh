@@ -4,26 +4,11 @@ set -euxo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 UV_DIR="$PROJECT_DIR/uv"
-UV_VERSION="$(jq -r .version "$PROJECT_DIR/data/uv.json")"
 
-# Clone uv if missing, or fetch if version doesn't match
-if [ ! -d "$UV_DIR/.git" ]; then
-    echo "==> Cloning uv $UV_VERSION..."
-    # Init in existing dir (may have cached target/) then fetch
-    git init "$UV_DIR"
-    git -C "$UV_DIR" remote add origin https://github.com/astral-sh/uv.git
-    git -C "$UV_DIR" fetch --depth 1 origin tag "$UV_VERSION"
-    git -C "$UV_DIR" checkout "$UV_VERSION"
-else
-    current="$(git -C "$UV_DIR" describe --tags --exact-match 2>/dev/null || echo "")"
-    if [ "$current" != "$UV_VERSION" ]; then
-        echo "==> Switching uv to $UV_VERSION..."
-        git -C "$UV_DIR" fetch --depth 1 origin tag "$UV_VERSION"
-        git -C "$UV_DIR" checkout "$UV_VERSION"
-    fi
-fi
+# Ensure uv is cloned at the correct version
+bash "$SCRIPT_DIR/clone-uv.sh"
 
-# Always reset to clean state
+# Reset to clean state (target/ is gitignored, unaffected)
 echo "==> Resetting uv to clean state..."
 cd "$UV_DIR"
 git checkout .
@@ -46,5 +31,10 @@ for patch in "$PROJECT_DIR/patches/"*.patch; do
 done
 
 bash "$SCRIPT_DIR/update-lockfile.sh"
+
+# Set stable mtimes so cargo fingerprints from cache remain valid
+# (git checkout resets mtimes to "now", which invalidates cached target/)
+echo "==> Stabilizing source mtimes..."
+find "$UV_DIR" -name target -prune -o -print0 | xargs -0 touch -t 202501010000
 
 echo "==> Done."
