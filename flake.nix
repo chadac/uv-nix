@@ -22,15 +22,11 @@
 
       flake.overlays.default = final: prev: {
         uv-nix = final.callPackage ./. { craneLib = crane.mkLib final; };
-        uv-nix-bin =
-          let binaries = import ./nix/uv-nix-binaries.nix { pkgs = final; };
-          in binaries.latest or null;
       };
 
       perSystem = { pkgs, system, lib, ... }:
         let
           package = pkgs.callPackage ./. { craneLib = crane.mkLib pkgs; };
-          binaries = import ./nix/uv-nix-binaries.nix { inherit pkgs; };
           pre-commit-check = git-hooks.lib.${system}.run {
             src = ./.;
             excludes = [ "^uv/" ];
@@ -46,10 +42,7 @@
         in {
           packages = {
             default = package;
-            src = package;
-          } // lib.optionalAttrs (binaries.latest or null != null) {
-            bin = binaries.latest;
-          } // binaries;
+          };
 
           checks.pre-commit = pre-commit-check;
 
