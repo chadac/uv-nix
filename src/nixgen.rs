@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
+use std::path::Path;
 
 use owo_colors::OwoColorize;
 
@@ -90,12 +91,48 @@ fn curated_libs(entry: &PackageBuildEntry) -> impl Iterator<Item = &String> {
     entry.libs.iter().chain(platform_libs.iter())
 }
 
+/// Scan a venv's site-packages for installed package names (normalized).
+fn installed_package_names(venv: &Path) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let lib_dir = venv.join("lib");
+    let Ok(entries) = std::fs::read_dir(&lib_dir) else {
+        return names;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("python") {
+            continue;
+        }
+        let sp = entry.path().join("site-packages");
+        let Ok(sp_entries) = std::fs::read_dir(&sp) else {
+            continue;
+        };
+        for sp_entry in sp_entries.flatten() {
+            let fname = sp_entry.file_name();
+            let fname_str = fname.to_string_lossy();
+            if let Some(rest) = fname_str.strip_suffix(".dist-info")
+                && let Some(pkg_name) = rest.rsplit_once('-').map(|(n, _)| n)
+            {
+                names.insert(normalize_package_name(pkg_name));
+            }
+        }
+    }
+    names
+}
+
+/// Normalize a Python package name: lowercase, replace [-_.] with -
+fn normalize_package_name(name: &str) -> String {
+    name.to_lowercase().replace(['_', '.'], "-")
+}
+
 /// Load the patch manifest from a venv and extract per-package nixpkgs dependencies.
 ///
 /// Merges ELF-resolved libs from the patch manifest with curated entries from
-/// `package-build-libs.json`. Returns a sorted list of packages that have
-/// native library requirements.
-fn collect_package_libs(manifest: &PatchManifest) -> Vec<PackageLibs> {
+/// `package-build-libs.json`. Also scans the venv for installed packages that
+/// have curated entries but no ELF binaries (e.g., pure Python packages with
+/// runtime-libs or build-system overrides).
+fn collect_package_libs(manifest: &PatchManifest, venv: &Path) -> Vec<PackageLibs> {
     let package_map: HashMap<String, PackageBuildEntry> =
         serde_json::from_str(PACKAGE_BUILD_LIBS_JSON).unwrap_or_default();
 
@@ -139,6 +176,47 @@ fn collect_package_libs(manifest: &PatchManifest) -> Vec<PackageLibs> {
                 runtime_attrs,
                 build_system_attrs,
             });
+        }
+    }
+
+    // Also check installed packages that aren't in the patch manifest but
+    // have curated entries (pure Python packages with runtime-libs or build-system).
+    let manifest_names: BTreeSet<&str> = manifest.packages.keys().map(|s| s.as_str()).collect();
+    let installed = installed_package_names(venv);
+    for pkg_name in &installed {
+        if manifest_names.contains(pkg_name.as_str()) {
+            continue;
+        }
+        if let Some(entry) = package_map.get(pkg_name.as_str()) {
+            let mut build_attrs = BTreeSet::new();
+            let mut runtime_attrs = BTreeSet::new();
+            let mut build_system_attrs = BTreeSet::new();
+
+            for attr in curated_libs(entry) {
+                if should_include_attr(attr) {
+                    build_attrs.insert(attr.clone());
+                }
+            }
+            for attr in &entry.runtime_libs {
+                if should_include_attr(attr) {
+                    runtime_attrs.insert(attr.clone());
+                }
+            }
+            for attr in &entry.build_system {
+                build_system_attrs.insert(attr.clone());
+            }
+
+            if !build_attrs.is_empty()
+                || !runtime_attrs.is_empty()
+                || !build_system_attrs.is_empty()
+            {
+                result.push(PackageLibs {
+                    name: pkg_name.clone(),
+                    build_attrs,
+                    runtime_attrs,
+                    build_system_attrs,
+                });
+            }
         }
     }
 
@@ -329,7 +407,7 @@ pub fn nix_gen<O: Write, E: Write>(
     }
 
     // Extract per-package native lib requirements
-    let packages = collect_package_libs(&manifest);
+    let packages = collect_package_libs(&manifest, &venv_path);
 
     // Generate the Nix expression
     let nix_expr = if opts.overlay_only {
@@ -428,7 +506,7 @@ mod tests {
                 vec![("pandas/_libs/lib.so", vec!["zlib"])],
             ),
         ]);
-        let libs = collect_package_libs(&manifest);
+        let libs = collect_package_libs(&manifest, Path::new(""));
         // numpy and pandas both appear (may have curated libs merged in too)
         let numpy = libs.iter().find(|p| p.name == "numpy").unwrap();
         assert!(numpy.build_attrs.contains("openblas"));
@@ -447,7 +525,7 @@ mod tests {
                 ("numpy/linalg/_umath_linalg.so", vec!["openblas"]),
             ],
         )]);
-        let libs = collect_package_libs(&manifest);
+        let libs = collect_package_libs(&manifest, Path::new(""));
         let numpy = libs.iter().find(|p| p.name == "numpy").unwrap();
         assert!(numpy.build_attrs.contains("openblas"));
         assert!(numpy.build_attrs.contains("zlib"));
@@ -460,7 +538,7 @@ mod tests {
             "1.0.0",
             vec![("foo/bar.so", vec!["zlib", "_internal_thing"])],
         )]);
-        let libs = collect_package_libs(&manifest);
+        let libs = collect_package_libs(&manifest, Path::new(""));
         let foo = libs.iter().find(|p| p.name == "foo").unwrap();
         assert!(foo.build_attrs.contains("zlib"));
         assert!(!foo.build_attrs.contains("_internal_thing"));
@@ -476,7 +554,7 @@ mod tests {
                 vec!["openblas", "glibc", "stdenv.cc.cc.lib", "util-linux.out"],
             )],
         )]);
-        let libs = collect_package_libs(&manifest);
+        let libs = collect_package_libs(&manifest, Path::new(""));
         let numpy = libs.iter().find(|p| p.name == "numpy").unwrap();
         assert!(numpy.build_attrs.contains("openblas"));
         assert!(!numpy.build_attrs.contains("glibc"));
@@ -491,7 +569,7 @@ mod tests {
             "1.0.0",
             vec![("foo/bar.so", vec!["glibc", "stdenv.cc.cc.lib"])],
         )]);
-        let libs = collect_package_libs(&manifest);
+        let libs = collect_package_libs(&manifest, Path::new(""));
         assert!(libs.iter().find(|p| p.name == "foo").is_none());
     }
 
@@ -505,7 +583,7 @@ mod tests {
             ),
             ("pure-python", "1.0.0", vec![]),
         ]);
-        let libs = collect_package_libs(&manifest);
+        let libs = collect_package_libs(&manifest, Path::new(""));
         assert!(libs.iter().find(|p| p.name == "numpy").is_some());
         assert!(libs.iter().find(|p| p.name == "pure-python").is_none());
     }
@@ -516,7 +594,7 @@ mod tests {
             ("zlib-wrapper", "1.0.0", vec![("z.so", vec!["zlib"])]),
             ("aaa-lib", "1.0.0", vec![("a.so", vec!["openssl"])]),
         ]);
-        let libs = collect_package_libs(&manifest);
+        let libs = collect_package_libs(&manifest, Path::new(""));
         let names: Vec<&str> = libs.iter().map(|p| p.name.as_str()).collect();
         assert!(names.windows(2).all(|w| w[0] <= w[1]));
     }
@@ -529,7 +607,7 @@ mod tests {
             "3.8.0",
             vec![("matplotlib/_c_internal.so", vec!["zlib"])],
         )]);
-        let libs = collect_package_libs(&manifest);
+        let libs = collect_package_libs(&manifest, Path::new(""));
         let mpl = libs.iter().find(|p| p.name == "matplotlib").unwrap();
         // ELF-resolved
         assert!(mpl.build_attrs.contains("zlib"));
@@ -544,9 +622,32 @@ mod tests {
     fn collect_package_libs_runtime_only_package() {
         // pysodium has runtime-libs + build-system, no ELF libs
         let manifest = make_manifest(vec![("pysodium", "0.7.18", vec![])]);
-        let libs = collect_package_libs(&manifest);
+        let libs = collect_package_libs(&manifest, Path::new(""));
         let ps = libs.iter().find(|p| p.name == "pysodium").unwrap();
         assert!(ps.build_attrs.is_empty());
+        assert!(ps.runtime_attrs.contains("libsodium"));
+        assert!(ps.build_system_attrs.contains("setuptools"));
+    }
+
+    #[test]
+    fn collect_package_libs_from_venv_scan() {
+        // Packages with curated entries that aren't in the manifest should be
+        // discovered by scanning the venv's site-packages.
+        let dir = tempfile::tempdir().unwrap();
+        let venv = dir.path().join(".venv");
+        let sp = venv.join("lib/python3.13/site-packages");
+        std::fs::create_dir_all(sp.join("pysodium-0.7.18.dist-info")).unwrap();
+
+        let manifest = make_manifest(vec![(
+            "numpy",
+            "1.26.0",
+            vec![("numpy/core/_multiarray.so", vec!["openblas"])],
+        )]);
+        let libs = collect_package_libs(&manifest, &venv);
+        // numpy from manifest
+        assert!(libs.iter().find(|p| p.name == "numpy").is_some());
+        // pysodium from venv scan (not in manifest)
+        let ps = libs.iter().find(|p| p.name == "pysodium").unwrap();
         assert!(ps.runtime_attrs.contains("libsodium"));
         assert!(ps.build_system_attrs.contains("setuptools"));
     }
