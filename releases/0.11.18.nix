@@ -3,5 +3,17 @@
   version = "0.11.18-nix";
   tag = "0.11.18";
   assets = {
+    "x86_64-linux" = {
+      url = "https://github.com/chadac/uv-nix/releases/download/0.11.18/uv-nix-0.11.18-linux-x86_64";
+      hash = "sha256-MJd3WwzoGZLMkJp0n9DYTw69oqFlR82yYqCsaRlWGnA=";
+    };
+    "aarch64-linux" = {
+      url = "https://github.com/chadac/uv-nix/releases/download/0.11.18/uv-nix-0.11.18-linux-aarch64";
+      hash = "sha256-mEXkcU/BoXZkbWtL2MktSrp5TzvFgnm6Tip1ZMbHOJU=";
+    };
+    "aarch64-darwin" = {
+      url = "https://github.com/chadac/uv-nix/releases/download/0.11.18/uv-nix-0.11.18-darwin-arm64";
+      hash = "sha256-2LyXXI0Hey2BYce41KK7dVVy9plJ0lHeceQICD8a3D8=";
+    };
   };
 }
