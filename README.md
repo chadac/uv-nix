@@ -37,12 +37,11 @@ This can be installed like any other Nix package.
 nix profile install github:chadac/uv-nix
 ```
 
-There are faster (and uv-version-pinned) binaries available from the
-flake as well:
+A pre-built binary is also available (faster install, no Rust
+compilation):
 
 ```bash
-nix profile install github:chadac/uv-nix#bin
-nix profile install github:chadac/uv-nix#bin-0.11.6
+nix profile install github:chadac/uv-nix/bin
 ```
 
 ## Usage
