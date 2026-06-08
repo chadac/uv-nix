@@ -88,9 +88,9 @@ jobs:
             fi
           }
 
-          LINUX_X86="uv-nix-${VERSION}-nix-linux-x86_64"
-          LINUX_ARM="uv-nix-${VERSION}-nix-linux-aarch64"
-          DARWIN_ARM="uv-nix-${VERSION}-nix-darwin-arm64"
+          LINUX_X86="uv-nix-${VERSION}-linux-x86_64"
+          LINUX_ARM="uv-nix-${VERSION}-linux-aarch64"
+          DARWIN_ARM="uv-nix-${VERSION}-darwin-arm64"
 
           echo "linux_x86_name=$LINUX_X86" >> $GITHUB_OUTPUT
           echo "linux_x86_hash=$(hash_asset "release/$LINUX_X86")" >> $GITHUB_OUTPUT
