@@ -222,10 +222,15 @@ pub fn post_install_patch(
     // Install ctypes hook for runtime-libs (dlopen/ctypes packages) even if
     // there are no native binaries — pure Python packages may need it.
     let runtime_lib_paths = collect_runtime_lib_paths(installed_packages, &rpath_by_attr);
-    if !runtime_lib_paths.is_empty()
-        && let Err(err) = ctypes_hook::install_ctypes_hook(site_packages, &runtime_lib_paths)
-    {
-        debug!("Failed to install ctypes hook: {err}");
+    if !runtime_lib_paths.is_empty() {
+        // Ensure store paths are realized — `nix eval` computes paths but
+        // doesn't download/build them. Without this, the ctypes hook would
+        // reference paths that don't exist on non-NixOS systems.
+        realize_store_paths(&runtime_lib_paths);
+
+        if let Err(err) = ctypes_hook::install_ctypes_hook(site_packages, &runtime_lib_paths) {
+            debug!("Failed to install ctypes hook: {err}");
+        }
     }
 
     if n_binaries == 0 {
@@ -315,6 +320,53 @@ pub fn post_install_patch(
     }
 
     Ok(())
+}
+
+/// Ensure Nix store paths exist on disk by running `nix-store --realise`.
+///
+/// `nix eval` computes store paths but doesn't build/download them.
+/// On non-NixOS systems (CI, plain Ubuntu/macOS with Nix), the paths
+/// may not exist until explicitly realized.
+fn realize_store_paths(lib_paths: &[PathBuf]) {
+    let store_paths: Vec<PathBuf> = lib_paths
+        .iter()
+        .filter_map(|p| {
+            // lib_paths are like /nix/store/...-libsodium-.../lib
+            // We need the store path root: /nix/store/...-libsodium-...
+            let s = p.to_string_lossy();
+            if s.starts_with("/nix/store/") {
+                let root = s.strip_suffix("/lib").unwrap_or(&s);
+                Some(PathBuf::from(root))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if store_paths.is_empty() {
+        return;
+    }
+
+    let mut cmd = Command::new("nix-store");
+    cmd.arg("--realise");
+    for p in &store_paths {
+        cmd.arg(p);
+    }
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::piped());
+
+    match cmd.output() {
+        Ok(output) if output.status.success() => {
+            debug!("Realized {} runtime-lib store paths", store_paths.len());
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            debug!("nix-store --realise failed: {}", stderr.trim());
+        }
+        Err(err) => {
+            debug!("Failed to run nix-store --realise: {err}");
+        }
+    }
 }
 
 /// Collect resolved store paths for runtime-libs needed by installed packages.

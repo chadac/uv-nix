@@ -175,6 +175,26 @@ if [ ! -x "$PYTHON" ]; then
     exit 1
 fi
 
+# Build LD_LIBRARY_PATH from the venv's Nix closure.
+# propagatedBuildInputs puts runtime libs in the closure, but Python's
+# ctypes.util.find_library needs LD_LIBRARY_PATH to discover them.
+LIB_PATH=""
+for lib_dir in $(find "$VENV_PATH" -name "lib" -path "*/nix/store/*" -type d 2>/dev/null | head -0); do true; done
+# Scan the closure for lib directories containing .so files
+for store_path in $(nix-store -qR "$VENV_PATH" 2>/dev/null); do
+    if [ -d "$store_path/lib" ]; then
+        # Only add dirs that actually have shared libraries
+        if ls "$store_path/lib/"*.so* &>/dev/null || ls "$store_path/lib/"*.dylib* &>/dev/null; then
+            LIB_PATH="${LIB_PATH:+$LIB_PATH:}$store_path/lib"
+        fi
+    fi
+done
+if [ -n "$LIB_PATH" ]; then
+    echo "Setting LD_LIBRARY_PATH from closure ($(echo "$LIB_PATH" | tr ':' '\n' | wc -l) dirs)"
+    export LD_LIBRARY_PATH="$LIB_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export DYLD_LIBRARY_PATH="$LIB_PATH${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+fi
+
 FAILED=0
 for entry in "${PACKAGES[@]}"; do
     pkg="${entry%%:*}"

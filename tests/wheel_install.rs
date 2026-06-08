@@ -201,25 +201,7 @@ wheel_test_wheel_only!(test_rasterio, "rasterio", "import rasterio; print('ok')"
 // ctypes/dlopen packages - need runtime-libs for library discovery
 // =============================================================================
 
-wheel_test!(
-    test_pysodium,
-    "pysodium",
-    concat!(
-        "import pathlib, os, sys; ",
-        "sp = pathlib.Path(sys.prefix) / 'lib'; ",
-        "pydir = next((p for p in sp.iterdir() if p.name.startswith('python')), None); ",
-        "conf = pydir / 'site-packages' / '_uv_nix_libs.conf' if pydir else None; ",
-        "print(f'conf={conf} exists={conf.is_file() if conf else False}'); ",
-        "dirs = conf.read_text().strip().split(chr(10)) if conf and conf.is_file() else []; ",
-        "print(f'dirs={dirs}'); ",
-        "[print(f'  {d}: exists={os.path.isdir(d)}, files={os.listdir(d) if os.path.isdir(d) else \"N/A\"}') for d in dirs]; ",
-        "import ctypes.util; ",
-        "print(f'find_library={ctypes.util.find_library(\"sodium\")}'); ",
-        "import _uv_nix_ctypes_hook; ",
-        "print(f'hook_dirs={_uv_nix_ctypes_hook._nix_lib_dirs}'); ",
-        "import pysodium; print('ok')"
-    )
-);
+wheel_test!(test_pysodium, "pysodium", "import pysodium; print('ok')");
 
 // =============================================================================
 // Linux-only packages - skipped if no wheel available
