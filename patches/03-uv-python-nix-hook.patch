@@ -1,22 +1,22 @@
 diff --git a/crates/uv-python/Cargo.toml b/crates/uv-python/Cargo.toml
-index 759375103..f27768ad9 100644
+index b2fe30c..f9c9712 100644
 --- a/crates/uv-python/Cargo.toml
 +++ b/crates/uv-python/Cargo.toml
-@@ -36,6 +36,7 @@ uv-redacted = { workspace = true }
+@@ -37,6 +37,7 @@ uv-redacted = { workspace = true }
  uv-state = { workspace = true }
  uv-static = { workspace = true }
  uv-trampoline-builder = { workspace = true }
 +uv-nix = { workspace = true }
  uv-warnings = { workspace = true }
-
+ 
  anyhow = { workspace = true }
 diff --git a/crates/uv-python/src/installation.rs b/crates/uv-python/src/installation.rs
-index adbcbd326..a1b2c3d01 100644
+index 0449614..99998a5 100644
 --- a/crates/uv-python/src/installation.rs
 +++ b/crates/uv-python/src/installation.rs
-@@ -148,6 +148,12 @@ impl PythonInstallation {
-
-         let err = match Self::find_existing(request, environments, preference, cache, preview) {
+@@ -143,6 +143,12 @@ impl PythonInstallation {
+ 
+         let err = match Self::find_existing(request, environments, preference, cache) {
              Ok(installation) => {
 +                // Ensure managed Python is patched for Nix on first use.
 +                if installation.is_managed() {
@@ -27,10 +27,10 @@ index adbcbd326..a1b2c3d01 100644
                  installation
                      .download_and_warn_if_outdated_prerelease(
                          request,
-@@ -326,6 +332,9 @@ impl PythonInstallation {
+@@ -324,6 +330,9 @@ impl PythonInstallation {
              e.warn_user(&installed);
          }
-
+ 
 +        // Patch ELF binaries and install ctypes hook for NixOS compatibility.
 +        uv_nix::post_python_install_patch(installed.path());
 +
