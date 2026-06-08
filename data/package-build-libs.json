@@ -87,7 +87,8 @@
     "build-tools": ["libmysqlclient"]
   },
   "matplotlib": {
-    "libs": ["libpng", "freetype", "cairo", "tcl", "tk"]
+    "libs": ["libpng", "freetype", "cairo", "tcl", "tk"],
+    "runtime-libs": ["fontconfig"]
   },
   "mpi4py": {
     "libs": ["mpi"]
@@ -178,7 +179,8 @@
     "libs": ["proj"]
   },
   "pysodium": {
-    "libs": ["libsodium"]
+    "runtime-libs": ["libsodium"],
+    "build-system": ["setuptools"]
   },
   "pyyaml": {
     "libs": ["libyaml"]

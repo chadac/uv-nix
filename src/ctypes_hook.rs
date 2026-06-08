@@ -43,15 +43,32 @@ pub fn install_ctypes_hook(site_packages: &Path, lib_paths: &[PathBuf]) -> anyho
     fs::write(&pth_path, "import _uv_nix_ctypes_hook\n")?;
     debug!("Installed pth file: {}", pth_path.display());
 
-    // Write the library paths config
+    // Write/merge the library paths config (preserves paths from prior installs)
     let conf_path = site_packages.join("_uv_nix_libs.conf");
-    let contents: String = lib_paths
-        .iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(&conf_path, contents + "\n")?;
-    debug!("Installed libs config: {}", conf_path.display());
+    let mut all_paths: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if conf_path.exists()
+        && let Ok(existing) = fs::read_to_string(&conf_path)
+    {
+        for line in existing.lines() {
+            let line = line.trim();
+            if !line.is_empty() && seen.insert(line.to_string()) {
+                all_paths.push(line.to_string());
+            }
+        }
+    }
+    for p in lib_paths {
+        let s = p.to_string_lossy().into_owned();
+        if seen.insert(s.clone()) {
+            all_paths.push(s);
+        }
+    }
+    fs::write(&conf_path, all_paths.join("\n") + "\n")?;
+    debug!(
+        "Installed libs config: {} ({} paths)",
+        conf_path.display(),
+        all_paths.len()
+    );
 
     Ok(())
 }

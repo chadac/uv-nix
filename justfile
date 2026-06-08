@@ -131,8 +131,12 @@ bench: build
 test-nix-gen: build
     UV_BIN="$(pwd)/uv/target/debug/uv" bash tests/nix-gen/test-nix-gen.sh
 
+# Run heavy uv nix gen test (matplotlib, scipy, etc. — slow)
+test-nix-gen-heavy: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" bash tests/nix-gen/test-nix-gen-heavy.sh
+
 # Run all test suites
-test-all: test-wheel test-source test-patch test-docker test-nix-gen
+test-all: test-wheel test-source test-patch test-docker test-nix-gen test-nix-gen-heavy
 
 # Clear test venv cache
 test-clean:

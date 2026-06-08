@@ -219,6 +219,15 @@ pub fn post_install_patch(
     let find_ms = t1.elapsed().as_millis();
     let n_binaries: usize = pkg_binaries.iter().map(|p| p.binaries.len()).sum();
 
+    // Install ctypes hook for runtime-libs (dlopen/ctypes packages) even if
+    // there are no native binaries — pure Python packages may need it.
+    let runtime_lib_paths = collect_runtime_lib_paths(installed_packages, &rpath_by_attr);
+    if !runtime_lib_paths.is_empty()
+        && let Err(err) = ctypes_hook::install_ctypes_hook(site_packages, &runtime_lib_paths)
+    {
+        debug!("Failed to install ctypes hook: {err}");
+    }
+
     if n_binaries == 0 {
         if timing {
             let total_ms = t_total.elapsed().as_millis();
@@ -306,6 +315,43 @@ pub fn post_install_patch(
     }
 
     Ok(())
+}
+
+/// Collect resolved store paths for runtime-libs needed by installed packages.
+///
+/// Looks up each installed package in package-build-libs.json, finds any
+/// `runtime-libs` entries, and resolves them to Nix store paths via the
+/// rpath_by_attr map.
+fn collect_runtime_lib_paths(
+    installed_packages: &[String],
+    rpath_by_attr: &std::collections::HashMap<String, PathBuf>,
+) -> Vec<PathBuf> {
+    let package_map: std::collections::HashMap<String, nix_config::PackageBuildEntry> =
+        match serde_json::from_str(nix_config::PACKAGE_BUILD_LIBS_JSON) {
+            Ok(m) => m,
+            Err(_) => return Vec::new(),
+        };
+
+    let mut paths = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for dist_prefix in installed_packages {
+        let (name, _version) = parse_dist_prefix(dist_prefix);
+
+        if let Some(entry) = package_map.get(&name) {
+            for attr in &entry.runtime_libs {
+                if seen.insert(attr.clone()) {
+                    if let Some(store_path) = rpath_by_attr.get(attr.as_str()) {
+                        paths.push(store_path.clone());
+                    } else {
+                        debug!("runtime-lib '{attr}' for {name} not found in rpath_by_attr");
+                    }
+                }
+            }
+        }
+    }
+
+    paths
 }
 
 /// Collect native binaries from RECORD files, grouped by package.

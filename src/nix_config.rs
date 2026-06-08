@@ -41,6 +41,12 @@ pub(crate) struct PackageBuildEntry {
     /// Darwin-only libs for this package
     #[serde(default, rename = "libs-darwin")]
     pub libs_darwin: Vec<String>,
+    /// Runtime-only libs loaded via ctypes/dlopen (not ELF NEEDED).
+    #[serde(default, rename = "runtime-libs")]
+    pub runtime_libs: Vec<String>,
+    /// Python build system packages (e.g., setuptools, wheel) needed to build from sdist.
+    #[serde(default, rename = "build-system")]
+    pub build_system: Vec<String>,
 }
 
 /// All Nix paths needed at runtime, resolved from a single `nix-build` call.
@@ -289,6 +295,10 @@ pub(crate) fn collect_all_lib_attrs() -> anyhow::Result<(Vec<String>, Vec<String
             for attr in &entry.libs_linux {
                 all_lib_set.insert(attr.clone());
             }
+        }
+        // Runtime-only libs (ctypes/dlopen)
+        for attr in &entry.runtime_libs {
+            all_lib_set.insert(attr.clone());
         }
     }
 

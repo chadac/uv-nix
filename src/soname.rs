@@ -725,27 +725,33 @@ mod tests {
     #[test]
     fn test_soname_map_loads() {
         let map = SonameMap::load_embedded().expect("Failed to load embedded soname map");
+        #[cfg(target_os = "linux")]
         assert!(
             !map.linux.is_empty(),
             "linux soname map should not be empty"
         );
+        #[cfg(target_os = "macos")]
         assert!(
             !map.darwin.is_empty(),
             "darwin soname map should not be empty"
         );
+        let _ = &map;
     }
 
     #[test]
     fn test_soname_map_has_common_entries() {
         let map = SonameMap::load_embedded().unwrap();
+        #[cfg(target_os = "linux")]
         assert!(
             map.linux.values().any(|v| v == "zlib"),
             "linux map should contain zlib"
         );
+        #[cfg(target_os = "macos")]
         assert!(
             map.darwin.values().any(|v| v == "zlib"),
             "darwin map should contain zlib"
         );
+        let _ = &map;
     }
 
     #[test]

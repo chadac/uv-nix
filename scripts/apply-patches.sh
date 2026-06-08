@@ -32,9 +32,4 @@ done
 
 bash "$SCRIPT_DIR/update-lockfile.sh"
 
-# Set stable mtimes so cargo fingerprints from cache remain valid
-# (git checkout resets mtimes to "now", which invalidates cached target/)
-echo "==> Stabilizing source mtimes..."
-find "$UV_DIR" -name target -prune -o -print0 | xargs -0 touch -t 202501010000
-
 echo "==> Done."
