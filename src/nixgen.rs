@@ -7,11 +7,13 @@
 //! - Full `package.nix`: complete uv2nix derivation with workspace, overlays, and native lib overrides
 //! - Overlay-only (`--overlay-only`): just the override overlay for native library dependencies
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
+use std::path::Path;
 
 use owo_colors::OwoColorize;
 
+use crate::nix_config::{PACKAGE_BUILD_LIBS_JSON, PackageBuildEntry};
 use crate::soname::PatchManifest;
 
 /// Options for `uv nix gen`.
@@ -27,38 +29,194 @@ pub struct GenOptions {
     pub prefer_wheels: bool,
 }
 
-/// Per-package native library requirements, derived from patch manifest.
+/// Per-package native library requirements, derived from patch manifest and curated data.
 #[derive(Debug, Clone)]
 struct PackageLibs {
     /// Normalized package name (e.g., "numpy").
     name: String,
-    /// Deduplicated nixpkgs attribute paths needed by this package (e.g., ["openblas", "zlib"]).
-    nix_attrs: BTreeSet<String>,
+    /// Nixpkgs attrs for buildInputs (ELF NEEDED + curated libs).
+    build_attrs: BTreeSet<String>,
+    /// Nixpkgs attrs for propagatedBuildInputs (runtime-only ctypes/dlopen libs).
+    runtime_attrs: BTreeSet<String>,
+    /// Python build system packages for nativeBuildInputs (e.g., setuptools).
+    /// Referenced as `final.<pkg>` in the Python package set, not `pkgs.<pkg>`.
+    build_system_attrs: BTreeSet<String>,
+}
+
+/// Attrs that are implicitly available in any Nix build environment and don't
+/// need explicit `buildInputs` overrides (they'd just be noise).
+const SKIP_ATTRS: &[&str] = &["glibc", "stdenv.cc.cc.lib", "util-linux.out"];
+
+/// Check if a string is a valid Nix identifier (can appear unquoted in attr paths).
+///
+/// Nix identifiers: `[a-zA-Z_][a-zA-Z0-9_'-]*`
+fn is_valid_nix_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '\'')
+}
+
+/// Render a nixpkgs attr path as `pkgs.foo.bar`, quoting components that aren't
+/// valid Nix identifiers with `${"..."}`.
+fn render_nix_attr(attr: &str) -> String {
+    let parts: Vec<&str> = attr.split('.').collect();
+    let mut out = String::from("pkgs");
+    for part in parts {
+        if is_valid_nix_ident(part) {
+            out.push('.');
+            out.push_str(part);
+        } else {
+            out.push_str(".${ \"");
+            out.push_str(part);
+            out.push_str("\" }");
+        }
+    }
+    out
+}
+
+fn should_include_attr(attr: &str) -> bool {
+    !attr.starts_with('_') && !SKIP_ATTRS.contains(&attr)
+}
+
+/// Platform-filtered libs from a curated package entry.
+fn curated_libs(entry: &PackageBuildEntry) -> impl Iterator<Item = &String> {
+    let platform_libs: &[String] = if cfg!(target_os = "macos") {
+        &entry.libs_darwin
+    } else {
+        &entry.libs_linux
+    };
+    entry.libs.iter().chain(platform_libs.iter())
+}
+
+/// Scan a venv's site-packages for installed package names (normalized).
+fn installed_package_names(venv: &Path) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let lib_dir = venv.join("lib");
+    let Ok(entries) = std::fs::read_dir(&lib_dir) else {
+        return names;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("python") {
+            continue;
+        }
+        let sp = entry.path().join("site-packages");
+        let Ok(sp_entries) = std::fs::read_dir(&sp) else {
+            continue;
+        };
+        for sp_entry in sp_entries.flatten() {
+            let fname = sp_entry.file_name();
+            let fname_str = fname.to_string_lossy();
+            if let Some(rest) = fname_str.strip_suffix(".dist-info")
+                && let Some(pkg_name) = rest.rsplit_once('-').map(|(n, _)| n)
+            {
+                names.insert(normalize_package_name(pkg_name));
+            }
+        }
+    }
+    names
+}
+
+/// Normalize a Python package name: lowercase, replace [-_.] with -
+fn normalize_package_name(name: &str) -> String {
+    name.to_lowercase().replace(['_', '.'], "-")
 }
 
 /// Load the patch manifest from a venv and extract per-package nixpkgs dependencies.
 ///
-/// Returns a sorted list of packages that have native library requirements.
-fn collect_package_libs(manifest: &PatchManifest) -> Vec<PackageLibs> {
+/// Merges ELF-resolved libs from the patch manifest with curated entries from
+/// `package-build-libs.json`. Also scans the venv for installed packages that
+/// have curated entries but no ELF binaries (e.g., pure Python packages with
+/// runtime-libs or build-system overrides).
+fn collect_package_libs(manifest: &PatchManifest, venv: &Path) -> Vec<PackageLibs> {
+    let package_map: HashMap<String, PackageBuildEntry> =
+        serde_json::from_str(PACKAGE_BUILD_LIBS_JSON).unwrap_or_default();
+
     let mut result = Vec::new();
 
     for (pkg_name, pkg_info) in &manifest.packages {
-        let mut nix_attrs = BTreeSet::new();
+        let mut build_attrs = BTreeSet::new();
+        let mut runtime_attrs = BTreeSet::new();
+        let mut build_system_attrs = BTreeSet::new();
 
+        // ELF-resolved libs from patch manifest → buildInputs
         for resolved in pkg_info.patches.values() {
             for attr in &resolved.nix_libs {
-                // Filter out internal/extra attrs (those starting with '_')
-                if !attr.starts_with('_') {
-                    nix_attrs.insert(attr.clone());
+                if should_include_attr(attr) {
+                    build_attrs.insert(attr.clone());
                 }
             }
         }
 
-        if !nix_attrs.is_empty() {
+        // Curated libs from package-build-libs.json
+        if let Some(entry) = package_map.get(pkg_name) {
+            for attr in curated_libs(entry) {
+                if should_include_attr(attr) {
+                    build_attrs.insert(attr.clone());
+                }
+            }
+            for attr in &entry.runtime_libs {
+                if should_include_attr(attr) {
+                    runtime_attrs.insert(attr.clone());
+                }
+            }
+            for attr in &entry.build_system {
+                build_system_attrs.insert(attr.clone());
+            }
+        }
+
+        if !build_attrs.is_empty() || !runtime_attrs.is_empty() || !build_system_attrs.is_empty() {
             result.push(PackageLibs {
                 name: pkg_name.clone(),
-                nix_attrs,
+                build_attrs,
+                runtime_attrs,
+                build_system_attrs,
             });
+        }
+    }
+
+    // Also check installed packages that aren't in the patch manifest but
+    // have curated entries (pure Python packages with runtime-libs or build-system).
+    let manifest_names: BTreeSet<&str> = manifest.packages.keys().map(|s| s.as_str()).collect();
+    let installed = installed_package_names(venv);
+    for pkg_name in &installed {
+        if manifest_names.contains(pkg_name.as_str()) {
+            continue;
+        }
+        if let Some(entry) = package_map.get(pkg_name.as_str()) {
+            let mut build_attrs = BTreeSet::new();
+            let mut runtime_attrs = BTreeSet::new();
+            let mut build_system_attrs = BTreeSet::new();
+
+            for attr in curated_libs(entry) {
+                if should_include_attr(attr) {
+                    build_attrs.insert(attr.clone());
+                }
+            }
+            for attr in &entry.runtime_libs {
+                if should_include_attr(attr) {
+                    runtime_attrs.insert(attr.clone());
+                }
+            }
+            for attr in &entry.build_system {
+                build_system_attrs.insert(attr.clone());
+            }
+
+            if !build_attrs.is_empty()
+                || !runtime_attrs.is_empty()
+                || !build_system_attrs.is_empty()
+            {
+                result.push(PackageLibs {
+                    name: pkg_name.clone(),
+                    build_attrs,
+                    runtime_attrs,
+                    build_system_attrs,
+                });
+            }
         }
     }
 
@@ -89,18 +247,33 @@ fn render_overlay(packages: &[PackageLibs]) -> String {
     out.push_str("final: prev: {\n");
 
     for pkg in packages {
-        let attrs: Vec<&String> = pkg.nix_attrs.iter().collect();
         writeln!(
             out,
             "  {} = prev.{}.overrideAttrs (old: {{",
             pkg.name, pkg.name
         )
         .unwrap();
-        out.push_str("    buildInputs = (old.buildInputs or []) ++ [\n");
-        for attr in &attrs {
-            writeln!(out, "      pkgs.{attr}").unwrap();
+        if !pkg.build_attrs.is_empty() {
+            out.push_str("    buildInputs = (old.buildInputs or []) ++ [\n");
+            for attr in &pkg.build_attrs {
+                writeln!(out, "      {}", render_nix_attr(attr)).unwrap();
+            }
+            out.push_str("    ];\n");
         }
-        out.push_str("    ];\n");
+        if !pkg.runtime_attrs.is_empty() {
+            out.push_str("    propagatedBuildInputs = (old.propagatedBuildInputs or []) ++ [\n");
+            for attr in &pkg.runtime_attrs {
+                writeln!(out, "      {}", render_nix_attr(attr)).unwrap();
+            }
+            out.push_str("    ];\n");
+        }
+        if !pkg.build_system_attrs.is_empty() {
+            out.push_str("    nativeBuildInputs = (old.nativeBuildInputs or []) ++ [\n");
+            for attr in &pkg.build_system_attrs {
+                writeln!(out, "      final.{attr}").unwrap();
+            }
+            out.push_str("    ];\n");
+        }
         out.push_str("  });\n");
     }
 
@@ -121,11 +294,12 @@ fn render_overlay(packages: &[PackageLibs]) -> String {
 ///   pyproject-nix,
 ///   pyproject-build-systems,
 ///   python ? pkgs.python312,
+///   sourcePreference ? "wheel",
 ///   ...
 /// }:
 /// let
 ///   workspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./.; };
-///   overlay = workspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
+///   overlay = workspace.mkPyprojectOverlay { inherit sourcePreference; };
 ///
 ///   # Native library overrides from uv-nix patch analysis
 ///   uvNixOverrides = final: prev: { ... };
@@ -145,6 +319,7 @@ fn render_overlay(packages: &[PackageLibs]) -> String {
 fn render_package_nix(packages: &[PackageLibs], prefer_wheels: bool) -> String {
     let mut out = String::new();
     out.push_str("# Auto-generated by `uv nix gen`. Do not edit.\n");
+    let source_pref = if prefer_wheels { "wheel" } else { "sdist" };
     out.push_str("{\n");
     out.push_str("  pkgs,\n");
     out.push_str("  lib,\n");
@@ -152,34 +327,45 @@ fn render_package_nix(packages: &[PackageLibs], prefer_wheels: bool) -> String {
     out.push_str("  pyproject-nix,\n");
     out.push_str("  pyproject-build-systems,\n");
     out.push_str("  python ? pkgs.python312,\n");
+    writeln!(out, "  sourcePreference ? \"{source_pref}\",").unwrap();
     out.push_str("  ...\n");
     out.push_str("}:\n");
     out.push_str("let\n");
     out.push_str("  workspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./.; };\n");
-    let source_pref = if prefer_wheels { "wheel" } else { "sdist" };
-    writeln!(
-        out,
-        "  overlay = workspace.mkPyprojectOverlay {{ sourcePreference = \"{source_pref}\"; }};"
-    )
-    .unwrap();
+    out.push_str("  overlay = workspace.mkPyprojectOverlay { inherit sourcePreference; };\n");
     out.push('\n');
 
     // Inline the native lib overlay
     out.push_str("  # Native library overrides from uv-nix patch analysis\n");
     out.push_str("  uvNixOverrides = final: prev: {\n");
     for pkg in packages {
-        let attrs: Vec<&String> = pkg.nix_attrs.iter().collect();
         writeln!(
             out,
             "    {} = prev.{}.overrideAttrs (old: {{",
             pkg.name, pkg.name
         )
         .unwrap();
-        out.push_str("      buildInputs = (old.buildInputs or []) ++ [\n");
-        for attr in &attrs {
-            writeln!(out, "        pkgs.{attr}").unwrap();
+        if !pkg.build_attrs.is_empty() {
+            out.push_str("      buildInputs = (old.buildInputs or []) ++ [\n");
+            for attr in &pkg.build_attrs {
+                writeln!(out, "        {}", render_nix_attr(attr)).unwrap();
+            }
+            out.push_str("      ];\n");
         }
-        out.push_str("      ];\n");
+        if !pkg.runtime_attrs.is_empty() {
+            out.push_str("      propagatedBuildInputs = (old.propagatedBuildInputs or []) ++ [\n");
+            for attr in &pkg.runtime_attrs {
+                writeln!(out, "        {}", render_nix_attr(attr)).unwrap();
+            }
+            out.push_str("      ];\n");
+        }
+        if !pkg.build_system_attrs.is_empty() {
+            out.push_str("      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [\n");
+            for attr in &pkg.build_system_attrs {
+                writeln!(out, "        final.{attr}").unwrap();
+            }
+            out.push_str("      ];\n");
+        }
         out.push_str("    });\n");
     }
     out.push_str("  };\n");
@@ -221,7 +407,7 @@ pub fn nix_gen<O: Write, E: Write>(
     }
 
     // Extract per-package native lib requirements
-    let packages = collect_package_libs(&manifest);
+    let packages = collect_package_libs(&manifest, &venv_path);
 
     // Generate the Nix expression
     let nix_expr = if opts.overlay_only {
@@ -283,6 +469,29 @@ mod tests {
         }
     }
 
+    fn make_pkg(name: &str, build: &[&str], runtime: &[&str]) -> PackageLibs {
+        PackageLibs {
+            name: name.into(),
+            build_attrs: build.iter().map(|s| s.to_string()).collect(),
+            runtime_attrs: runtime.iter().map(|s| s.to_string()).collect(),
+            build_system_attrs: BTreeSet::new(),
+        }
+    }
+
+    fn make_pkg_full(
+        name: &str,
+        build: &[&str],
+        runtime: &[&str],
+        build_system: &[&str],
+    ) -> PackageLibs {
+        PackageLibs {
+            name: name.into(),
+            build_attrs: build.iter().map(|s| s.to_string()).collect(),
+            runtime_attrs: runtime.iter().map(|s| s.to_string()).collect(),
+            build_system_attrs: build_system.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
     #[test]
     fn collect_package_libs_basic() {
         let manifest = make_manifest(vec![
@@ -297,15 +506,13 @@ mod tests {
                 vec![("pandas/_libs/lib.so", vec!["zlib"])],
             ),
         ]);
-        let libs = collect_package_libs(&manifest);
-        assert_eq!(libs.len(), 2);
-        assert_eq!(libs[0].name, "numpy");
-        assert_eq!(
-            libs[0].nix_attrs,
-            BTreeSet::from(["openblas".into(), "zlib".into()])
-        );
-        assert_eq!(libs[1].name, "pandas");
-        assert_eq!(libs[1].nix_attrs, BTreeSet::from(["zlib".into()]));
+        let libs = collect_package_libs(&manifest, Path::new(""));
+        // numpy and pandas both appear (may have curated libs merged in too)
+        let numpy = libs.iter().find(|p| p.name == "numpy").unwrap();
+        assert!(numpy.build_attrs.contains("openblas"));
+        assert!(numpy.build_attrs.contains("zlib"));
+        let pandas = libs.iter().find(|p| p.name == "pandas").unwrap();
+        assert!(pandas.build_attrs.contains("zlib"));
     }
 
     #[test]
@@ -318,12 +525,10 @@ mod tests {
                 ("numpy/linalg/_umath_linalg.so", vec!["openblas"]),
             ],
         )]);
-        let libs = collect_package_libs(&manifest);
-        assert_eq!(libs.len(), 1);
-        assert_eq!(
-            libs[0].nix_attrs,
-            BTreeSet::from(["openblas".into(), "zlib".into()])
-        );
+        let libs = collect_package_libs(&manifest, Path::new(""));
+        let numpy = libs.iter().find(|p| p.name == "numpy").unwrap();
+        assert!(numpy.build_attrs.contains("openblas"));
+        assert!(numpy.build_attrs.contains("zlib"));
     }
 
     #[test]
@@ -333,9 +538,39 @@ mod tests {
             "1.0.0",
             vec![("foo/bar.so", vec!["zlib", "_internal_thing"])],
         )]);
-        let libs = collect_package_libs(&manifest);
-        assert_eq!(libs.len(), 1);
-        assert_eq!(libs[0].nix_attrs, BTreeSet::from(["zlib".into()]));
+        let libs = collect_package_libs(&manifest, Path::new(""));
+        let foo = libs.iter().find(|p| p.name == "foo").unwrap();
+        assert!(foo.build_attrs.contains("zlib"));
+        assert!(!foo.build_attrs.contains("_internal_thing"));
+    }
+
+    #[test]
+    fn collect_package_libs_filters_system_attrs() {
+        let manifest = make_manifest(vec![(
+            "numpy",
+            "1.26.0",
+            vec![(
+                "numpy/core/_multiarray.so",
+                vec!["openblas", "glibc", "stdenv.cc.cc.lib", "util-linux.out"],
+            )],
+        )]);
+        let libs = collect_package_libs(&manifest, Path::new(""));
+        let numpy = libs.iter().find(|p| p.name == "numpy").unwrap();
+        assert!(numpy.build_attrs.contains("openblas"));
+        assert!(!numpy.build_attrs.contains("glibc"));
+        assert!(!numpy.build_attrs.contains("stdenv.cc.cc.lib"));
+        assert!(!numpy.build_attrs.contains("util-linux.out"));
+    }
+
+    #[test]
+    fn collect_package_libs_skips_package_with_only_system_attrs() {
+        let manifest = make_manifest(vec![(
+            "foo",
+            "1.0.0",
+            vec![("foo/bar.so", vec!["glibc", "stdenv.cc.cc.lib"])],
+        )]);
+        let libs = collect_package_libs(&manifest, Path::new(""));
+        assert!(libs.iter().find(|p| p.name == "foo").is_none());
     }
 
     #[test]
@@ -348,9 +583,9 @@ mod tests {
             ),
             ("pure-python", "1.0.0", vec![]),
         ]);
-        let libs = collect_package_libs(&manifest);
-        assert_eq!(libs.len(), 1);
-        assert_eq!(libs[0].name, "numpy");
+        let libs = collect_package_libs(&manifest, Path::new(""));
+        assert!(libs.iter().find(|p| p.name == "numpy").is_some());
+        assert!(libs.iter().find(|p| p.name == "pure-python").is_none());
     }
 
     #[test]
@@ -359,35 +594,132 @@ mod tests {
             ("zlib-wrapper", "1.0.0", vec![("z.so", vec!["zlib"])]),
             ("aaa-lib", "1.0.0", vec![("a.so", vec!["openssl"])]),
         ]);
-        let libs = collect_package_libs(&manifest);
-        assert_eq!(libs[0].name, "aaa-lib");
-        assert_eq!(libs[1].name, "zlib-wrapper");
+        let libs = collect_package_libs(&manifest, Path::new(""));
+        let names: Vec<&str> = libs.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn collect_package_libs_merges_curated_libs() {
+        // matplotlib has curated libs in package-build-libs.json
+        let manifest = make_manifest(vec![(
+            "matplotlib",
+            "3.8.0",
+            vec![("matplotlib/_c_internal.so", vec!["zlib"])],
+        )]);
+        let libs = collect_package_libs(&manifest, Path::new(""));
+        let mpl = libs.iter().find(|p| p.name == "matplotlib").unwrap();
+        // ELF-resolved
+        assert!(mpl.build_attrs.contains("zlib"));
+        // Curated libs from package-build-libs.json
+        assert!(mpl.build_attrs.contains("freetype"));
+        assert!(mpl.build_attrs.contains("libpng"));
+        // Runtime-libs from package-build-libs.json
+        assert!(mpl.runtime_attrs.contains("fontconfig"));
+    }
+
+    #[test]
+    fn collect_package_libs_runtime_only_package() {
+        // pysodium has runtime-libs + build-system, no ELF libs
+        let manifest = make_manifest(vec![("pysodium", "0.7.18", vec![])]);
+        let libs = collect_package_libs(&manifest, Path::new(""));
+        let ps = libs.iter().find(|p| p.name == "pysodium").unwrap();
+        assert!(ps.build_attrs.is_empty());
+        assert!(ps.runtime_attrs.contains("libsodium"));
+        assert!(ps.build_system_attrs.contains("setuptools"));
+    }
+
+    #[test]
+    fn collect_package_libs_from_venv_scan() {
+        // Packages with curated entries that aren't in the manifest should be
+        // discovered by scanning the venv's site-packages.
+        let dir = tempfile::tempdir().unwrap();
+        let venv = dir.path().join(".venv");
+        let sp = venv.join("lib/python3.13/site-packages");
+        std::fs::create_dir_all(sp.join("pysodium-0.7.18.dist-info")).unwrap();
+
+        let manifest = make_manifest(vec![(
+            "numpy",
+            "1.26.0",
+            vec![("numpy/core/_multiarray.so", vec!["openblas"])],
+        )]);
+        let libs = collect_package_libs(&manifest, &venv);
+        // numpy from manifest
+        assert!(libs.iter().find(|p| p.name == "numpy").is_some());
+        // pysodium from venv scan (not in manifest)
+        let ps = libs.iter().find(|p| p.name == "pysodium").unwrap();
+        assert!(ps.runtime_attrs.contains("libsodium"));
+        assert!(ps.build_system_attrs.contains("setuptools"));
     }
 
     #[test]
     fn render_overlay_single_package() {
-        let packages = vec![PackageLibs {
-            name: "numpy".into(),
-            nix_attrs: BTreeSet::from(["openblas".into()]),
-        }];
+        let packages = vec![make_pkg("numpy", &["openblas"], &[])];
         let output = render_overlay(&packages);
         assert!(output.contains("Auto-generated"));
         assert!(output.contains("final: prev:"));
         assert!(output.contains("numpy = prev.numpy.overrideAttrs"));
+        assert!(output.contains("buildInputs"));
         assert!(output.contains("pkgs.openblas"));
+        assert!(!output.contains("propagatedBuildInputs"));
+    }
+
+    #[test]
+    fn render_overlay_with_runtime_attrs() {
+        let packages = vec![make_pkg("matplotlib", &["freetype"], &["fontconfig"])];
+        let output = render_overlay(&packages);
+        assert!(output.contains("buildInputs"));
+        assert!(output.contains("pkgs.freetype"));
+        assert!(output.contains("propagatedBuildInputs"));
+        assert!(output.contains("pkgs.fontconfig"));
+    }
+
+    #[test]
+    fn render_overlay_runtime_only() {
+        let packages = vec![make_pkg("pysodium", &[], &["libsodium"])];
+        let output = render_overlay(&packages);
+        assert!(!output.contains("buildInputs ="));
+        assert!(output.contains("propagatedBuildInputs"));
+        assert!(output.contains("pkgs.libsodium"));
+    }
+
+    #[test]
+    fn render_overlay_with_build_system() {
+        let packages = vec![make_pkg_full(
+            "pysodium",
+            &[],
+            &["libsodium"],
+            &["setuptools"],
+        )];
+        let output = render_overlay(&packages);
+        assert!(output.contains("propagatedBuildInputs"));
+        assert!(output.contains("pkgs.libsodium"));
+        assert!(output.contains("nativeBuildInputs"));
+        assert!(output.contains("final.setuptools"));
+        assert!(!output.contains("pkgs.setuptools"));
+    }
+
+    #[test]
+    fn render_overlay_build_system_only() {
+        let packages = vec![make_pkg_full(
+            "legacy-pkg",
+            &[],
+            &[],
+            &["setuptools", "wheel"],
+        )];
+        let output = render_overlay(&packages);
+        assert!(!output.contains("buildInputs ="));
+        assert!(!output.contains("propagatedBuildInputs"));
+        assert!(output.contains("nativeBuildInputs"));
+        assert!(output.contains("final.setuptools"));
+        assert!(output.contains("final.wheel"));
     }
 
     #[test]
     fn render_overlay_multiple_packages() {
         let packages = vec![
-            PackageLibs {
-                name: "numpy".into(),
-                nix_attrs: BTreeSet::from(["openblas".into(), "zlib".into()]),
-            },
-            PackageLibs {
-                name: "pandas".into(),
-                nix_attrs: BTreeSet::from(["zlib".into()]),
-            },
+            make_pkg("numpy", &["openblas", "zlib"], &[]),
+            make_pkg("pandas", &["zlib"], &[]),
         ];
         let output = render_overlay(&packages);
         assert!(output.contains("numpy = prev.numpy.overrideAttrs"));
@@ -400,40 +732,96 @@ mod tests {
     fn render_overlay_empty() {
         let output = render_overlay(&[]);
         assert!(output.contains("final: prev:"));
-        // Should still be valid Nix (empty attrset)
     }
 
     #[test]
     fn render_package_nix_contains_uv2nix_boilerplate() {
-        let packages = vec![PackageLibs {
-            name: "numpy".into(),
-            nix_attrs: BTreeSet::from(["openblas".into()]),
-        }];
+        let packages = vec![make_pkg("numpy", &["openblas"], &[])];
         let output = render_package_nix(&packages, true);
         assert!(output.contains("uv2nix"));
         assert!(output.contains("pyproject-nix"));
         assert!(output.contains("pyproject-build-systems"));
         assert!(output.contains("loadWorkspace"));
         assert!(output.contains("mkPyprojectOverlay"));
-        assert!(output.contains("sourcePreference = \"wheel\""));
+        assert!(output.contains("sourcePreference ? \"wheel\""));
+        assert!(output.contains("inherit sourcePreference"));
         assert!(output.contains("composeManyExtensions"));
         assert!(output.contains("mkVirtualEnv"));
-        // The overlay should be inlined
         assert!(output.contains("numpy = prev.numpy.overrideAttrs"));
+    }
+
+    #[test]
+    fn render_package_nix_with_propagated() {
+        let packages = vec![make_pkg("matplotlib", &["freetype"], &["fontconfig"])];
+        let output = render_package_nix(&packages, true);
+        assert!(output.contains("buildInputs"));
+        assert!(output.contains("pkgs.freetype"));
+        assert!(output.contains("propagatedBuildInputs"));
+        assert!(output.contains("pkgs.fontconfig"));
+    }
+
+    #[test]
+    fn render_package_nix_with_build_system() {
+        let packages = vec![make_pkg_full(
+            "pysodium",
+            &[],
+            &["libsodium"],
+            &["setuptools"],
+        )];
+        let output = render_package_nix(&packages, true);
+        assert!(output.contains("propagatedBuildInputs"));
+        assert!(output.contains("pkgs.libsodium"));
+        assert!(output.contains("nativeBuildInputs"));
+        assert!(output.contains("final.setuptools"));
+        assert!(!output.contains("pkgs.setuptools"));
     }
 
     #[test]
     fn render_package_nix_prefer_sdist() {
         let output = render_package_nix(&[], false);
-        assert!(output.contains("sourcePreference = \"sdist\""));
+        assert!(output.contains("sourcePreference ? \"sdist\""));
     }
 
     #[test]
     fn render_package_nix_empty_packages() {
         let output = render_package_nix(&[], true);
-        // Even with no native libs, we should still get valid uv2nix boilerplate
         assert!(output.contains("uv2nix"));
         assert!(output.contains("mkVirtualEnv"));
+    }
+
+    #[test]
+    fn is_valid_nix_ident_basic() {
+        assert!(is_valid_nix_ident("openssl"));
+        assert!(is_valid_nix_ident("zlib"));
+        assert!(is_valid_nix_ident("libjpeg_turbo"));
+        assert!(is_valid_nix_ident("arrow-cpp"));
+        assert!(is_valid_nix_ident("_private"));
+        assert!(is_valid_nix_ident("boost188"));
+    }
+
+    #[test]
+    fn is_valid_nix_ident_invalid() {
+        assert!(!is_valid_nix_ident(""));
+        assert!(!is_valid_nix_ident("123abc"));
+        assert!(!is_valid_nix_ident("foo bar"));
+        assert!(!is_valid_nix_ident("foo.bar"));
+    }
+
+    #[test]
+    fn render_nix_attr_simple() {
+        assert_eq!(render_nix_attr("openssl"), "pkgs.openssl");
+        assert_eq!(render_nix_attr("arrow-cpp"), "pkgs.arrow-cpp");
+    }
+
+    #[test]
+    fn render_nix_attr_dotted_path() {
+        assert_eq!(render_nix_attr("stdenv.cc.cc.lib"), "pkgs.stdenv.cc.cc.lib");
+        assert_eq!(render_nix_attr("gfortran.cc.lib"), "pkgs.gfortran.cc.lib");
+    }
+
+    #[test]
+    fn render_nix_attr_needs_quoting() {
+        assert_eq!(render_nix_attr("foo.123bar"), "pkgs.foo.${ \"123bar\" }");
     }
 
     #[test]

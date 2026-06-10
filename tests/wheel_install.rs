@@ -198,6 +198,12 @@ wheel_test_wheel_only!(test_fiona, "fiona", "import fiona; print('ok')");
 wheel_test_wheel_only!(test_rasterio, "rasterio", "import rasterio; print('ok')");
 
 // =============================================================================
+// ctypes/dlopen packages - need runtime-libs for library discovery
+// =============================================================================
+
+wheel_test!(test_pysodium, "pysodium", "import pysodium; print('ok')");
+
+// =============================================================================
 // Linux-only packages - skipped if no wheel available
 // =============================================================================
 

@@ -54,8 +54,10 @@ def _resolve_in_nix_dirs(name):
     candidates = [name]
     if not name.startswith("lib"):
         candidates.append(f"lib{name}.so")
-    if ".so" not in name:
+        candidates.append(f"lib{name}.dylib")
+    if ".so" not in name and ".dylib" not in name:
         candidates.append(f"{name}.so")
+        candidates.append(f"{name}.dylib")
 
     for d in _nix_lib_dirs:
         dirpath = Path(d)
@@ -65,8 +67,8 @@ def _resolve_in_nix_dirs(name):
             full = dirpath / candidate
             if full.is_file():
                 return str(full)
-            # Also try versioned .so (e.g., libz.so.1)
-            if ".so" in candidate:
+            # Also try versioned variants (e.g., libz.so.1, libsodium.26.dylib)
+            if ".so" in candidate or ".dylib" in candidate:
                 for f in dirpath.iterdir():
                     if f.name.startswith(candidate) and f.is_file():
                         return str(f)
@@ -101,7 +103,7 @@ _orig_find_library = ctypes.util.find_library
 
 def _patched_find_library(name):
     # find_library receives bare names like "z", "ssl", "crypto"
-    candidates = [f"lib{name}.so"]
+    candidates = [f"lib{name}.so", f"lib{name}.dylib"]
     for d in _nix_lib_dirs:
         dirpath = Path(d)
         if not dirpath.is_dir():
@@ -110,7 +112,7 @@ def _patched_find_library(name):
             full = dirpath / candidate
             if full.is_file():
                 return str(full)
-            # Check versioned .so files
+            # Check versioned variants (e.g., libz.so.1, libsodium.26.dylib)
             for f in dirpath.iterdir():
                 if f.name.startswith(candidate) and f.is_file():
                     return str(f)
