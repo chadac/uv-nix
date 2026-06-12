@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -201,6 +202,22 @@ pub fn patch_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
     }
 }
 
+/// Break a hardlink by replacing the file with an independent copy.
+///
+/// uv installs packages via hardlinks from its archive cache. patchelf
+/// modifies binaries in-place (same inode), which would corrupt the
+/// shared cache entry and race with parallel installs reading it.
+fn break_hardlink(path: &Path) -> anyhow::Result<()> {
+    let meta = fs::metadata(path)?;
+    if meta.nlink() <= 1 {
+        return Ok(());
+    }
+    let tmp = path.with_extension("uv-nix-tmp");
+    fs::copy(path, &tmp)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 /// Run `patchelf` on a single ELF binary to set the RPATH and interpreter.
 ///
 /// RPATH is set first (works on all ELF files), then the interpreter is set
@@ -232,6 +249,8 @@ fn patch_elf_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
             debug!("Already patched, skipping: {}", path.display());
             return Ok(());
         }
+
+        break_hardlink(path)?;
 
         // Build the final RPATH:
         // 1. Keep existing RPATH (preserves $ORIGIN paths from wheels)
@@ -342,6 +361,8 @@ fn patch_macho_binary(path: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    break_hardlink(path)?;
+
     let mut cmd = Command::new(&config.patcher);
     for (old, new) in &changes {
         cmd.arg("-change").arg(old).arg(new);
@@ -432,6 +453,8 @@ fn ensure_origin_rpath(path: &Path, config: &PatchConfig) -> anyhow::Result<()> 
     if existing.contains("$ORIGIN") {
         return Ok(());
     }
+
+    break_hardlink(path)?;
 
     let new_rpath = if existing.is_empty() {
         "$ORIGIN".to_string()
