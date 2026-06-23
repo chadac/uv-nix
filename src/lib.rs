@@ -52,6 +52,27 @@ pub use cli::{CliOutput, InfoOptions, PatchOptions};
 pub use cli::{nix_info, nix_patch};
 pub use nixgen::{GenOptions, nix_gen};
 
+/// Resolve the default virtual environment path.
+///
+/// Checks, in order:
+/// 1. `UV_PROJECT_ENVIRONMENT` — absolute or relative to CWD
+/// 2. `VIRTUAL_ENV` — absolute or relative to CWD
+/// 3. Falls back to `.venv` in CWD
+pub fn resolve_default_venv() -> PathBuf {
+    for var in ["UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"] {
+        if let Ok(val) = std::env::var(var)
+            && !val.is_empty()
+        {
+            let p = PathBuf::from(&val);
+            if p.is_absolute() {
+                return p;
+            }
+            return std::env::current_dir().unwrap_or_default().join(p);
+        }
+    }
+    PathBuf::from(".venv")
+}
+
 /// Create a `nix` command with the required experimental features enabled.
 ///
 /// All `nix` subcommands (build, eval, etc.) need `nix-command`.

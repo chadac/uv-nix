@@ -18,7 +18,7 @@ index e2a7281d6..8e3b0f4f9 100644
 @@ -856,6 +862,79 @@ pub struct SelfUpdateArgs {
      pub dry_run: bool,
  }
- 
+
 +#[derive(Args)]
 +pub struct NixNamespace {
 +    #[command(subcommand)]
@@ -38,8 +38,8 @@ index e2a7281d6..8e3b0f4f9 100644
 +#[derive(Args)]
 +pub struct NixPatchArgs {
 +    /// Path to the virtual environment to patch.
-+    #[arg(default_value = ".venv")]
-+    pub path: PathBuf,
++    /// Defaults to UV_PROJECT_ENVIRONMENT, VIRTUAL_ENV, or .venv.
++    pub path: Option<PathBuf>,
 +    /// Only patch the Python interpreter, not packages.
 +    #[arg(long, conflicts_with = "only_packages")]
 +    pub only_python: bool,
@@ -63,8 +63,8 @@ index e2a7281d6..8e3b0f4f9 100644
 +#[derive(Args)]
 +pub struct NixInfoArgs {
 +    /// Path to the virtual environment.
-+    #[arg(default_value = ".venv")]
-+    pub path: PathBuf,
++    /// Defaults to UV_PROJECT_ENVIRONMENT, VIRTUAL_ENV, or .venv.
++    pub path: Option<PathBuf>,
 +    /// Show verbose output including individual binaries and RPATH entries.
 +    #[arg(long)]
 +    pub show_details: bool,
@@ -79,8 +79,8 @@ index e2a7281d6..8e3b0f4f9 100644
 +#[derive(Args)]
 +pub struct NixGenArgs {
 +    /// Path to the virtual environment.
-+    #[arg(default_value = ".venv")]
-+    pub venv: PathBuf,
++    /// Defaults to UV_PROJECT_ENVIRONMENT, VIRTUAL_ENV, or .venv.
++    pub venv: Option<PathBuf>,
 +    /// Write output to a file instead of stdout.
 +    #[arg(short, long)]
 +    pub output: Option<PathBuf>,

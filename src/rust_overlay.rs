@@ -257,16 +257,28 @@ in pkgs.rust-bin.stable."{rust_version}".default"#
     })
 }
 
-/// Load locked inputs from `.venv/share/uv-nix/locked.json` (searching upward for .venv).
+/// Load locked inputs from `<venv>/share/uv-nix/locked.json`.
 fn load_locked_inputs(project_dir: &Path) -> Option<LockedInputs> {
-    let lock_path = project_dir.join(".venv/share/uv-nix/locked.json");
+    let venv = crate::resolve_default_venv();
+    let venv_dir = if venv.is_absolute() {
+        venv
+    } else {
+        project_dir.join(venv)
+    };
+    let lock_path = venv_dir.join("share/uv-nix/locked.json");
     let content = std::fs::read_to_string(&lock_path).ok()?;
     serde_json::from_str(&content).ok()
 }
 
-/// Save locked inputs to `.venv/share/uv-nix/locked.json`.
+/// Save locked inputs to `<venv>/share/uv-nix/locked.json`.
 fn save_locked_inputs(project_dir: &Path, inputs: &LockedInputs) {
-    let dir = project_dir.join(".venv/share/uv-nix");
+    let venv = crate::resolve_default_venv();
+    let venv_dir = if venv.is_absolute() {
+        venv
+    } else {
+        project_dir.join(venv)
+    };
+    let dir = venv_dir.join("share/uv-nix");
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -377,8 +389,12 @@ version = "0.1.0"
     #[test]
     fn test_locked_inputs_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let venv = dir.path().join(".venv/share/uv-nix");
-        std::fs::create_dir_all(&venv).unwrap();
+        let venv_dir = dir.path().join("my-venv");
+        std::fs::create_dir_all(venv_dir.join("share/uv-nix")).unwrap();
+
+        // Point resolve_default_venv() at our temp venv
+        // SAFETY: this test is not parallel with other tests that read this env var
+        unsafe { std::env::set_var("UV_PROJECT_ENVIRONMENT", &venv_dir) };
 
         let inputs = LockedInputs {
             rust_overlay: Some(LockedRustOverlay {
@@ -392,5 +408,8 @@ version = "0.1.0"
         let overlay = loaded.rust_overlay.unwrap();
         assert_eq!(overlay.rev, "abc123");
         assert_eq!(overlay.resolved_version, "1.95.0");
+
+        // SAFETY: this test is not parallel with other tests that read this env var
+        unsafe { std::env::remove_var("UV_PROJECT_ENVIRONMENT") };
     }
 }
