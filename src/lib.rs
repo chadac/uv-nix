@@ -492,13 +492,10 @@ fn collect_package_binaries_from_records(
 /// is everything after the last hyphen before the version starts (digits).
 fn parse_dist_prefix(prefix: &str) -> (String, String) {
     // Find the split point: last hyphen followed by a digit
-    if let Some(idx) = prefix.rfind('-').and_then(|i| {
-        if prefix[i + 1..].starts_with(|c: char| c.is_ascii_digit()) {
-            Some(i)
-        } else {
-            None
-        }
-    }) {
+    if let Some(idx) = prefix
+        .rfind('-')
+        .filter(|&i| prefix[i + 1..].starts_with(|c: char| c.is_ascii_digit()))
+    {
         let name = prefix[..idx].replace('_', "-");
         let version = prefix[idx + 1..].to_string();
         (name, version)
