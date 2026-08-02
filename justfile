@@ -17,14 +17,14 @@ build:
 
 _build-inner:
     bash scripts/apply-patches.sh
-    CARGO_LOG=cargo::core::compiler::fingerprint=info cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "uv-distribution/static,test-defaults"
+    CARGO_LOG=cargo::core::compiler::fingerprint=info cargo build --manifest-path uv/Cargo.toml --package uv --no-default-features --features "test-defaults"
 
 # Install optimized binary to ~/.local/bin
 # Uses uv's "fast-build" profile (opt-level=1, no LTO) for much faster builds
 # than --release (which uses fat LTO). Use `just install-release` for full optimization.
 install:
     bash scripts/apply-patches.sh && \
-    cargo build --manifest-path uv/Cargo.toml --package uv --profile fast-build --no-default-features --features "uv-distribution/static,test-defaults" && \
+    cargo build --manifest-path uv/Cargo.toml --package uv --profile fast-build --no-default-features --features "test-defaults" && \
     mkdir -p ~/.local/bin && \
     cp uv/target/fast-build/uv ~/.local/bin/uv && \
     echo "Installed uv to ~/.local/bin/uv"
@@ -32,7 +32,7 @@ install:
 # Install fully optimized release binary (slow build — fat LTO)
 install-release:
     bash scripts/apply-patches.sh && \
-    cargo build --manifest-path uv/Cargo.toml --package uv --release --no-default-features --features "uv-distribution/static,test-defaults" && \
+    cargo build --manifest-path uv/Cargo.toml --package uv --release --no-default-features --features "test-defaults" && \
     mkdir -p ~/.local/bin && \
     cp uv/target/release/uv ~/.local/bin/uv && \
     echo "Installed uv to ~/.local/bin/uv"
