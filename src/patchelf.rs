@@ -132,53 +132,46 @@ pub fn is_native_binary(path: &Path, is_darwin: bool) -> bool {
     }
 }
 
-/// Find ELF binaries in a directory by checking for `.so` extensions and ELF magic bytes.
-pub fn find_elf_binaries(dir: &Path) -> Vec<PathBuf> {
+/// Walk `dir` and collect every real (non-symlink) file whose leading magic
+/// bytes identify it as a native binary of the requested kind.
+///
+/// Symlinks are skipped deliberately: the patchers (`patchelf` /
+/// `install_name_tool`) follow a symlink and rewrite its *real target*, so
+/// patching via a link would corrupt/redundantly patch the underlying file.
+/// A Python install's `bin/` has `python` and `python3` symlinks pointing at
+/// the real `python3.X` binary; we skip the links and match the real binary
+/// directly.
+///
+/// Matching on magic bytes (rather than filename heuristics) is what lets us
+/// pick up the real interpreter, whose name (`python3.12`) contains a version
+/// dot and so was previously only reachable through its extensionless symlink.
+/// Non-binaries (shell scripts like `2to3-3.10`, `pydoc3.10`) lack native
+/// magic and are ignored.
+fn find_native_by_magic(dir: &Path, is_native: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     let mut results = Vec::new();
     for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
+        if entry.path_is_symlink() {
+            continue;
+        }
         if !path.is_file() {
             continue;
         }
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-        // Match .so files (including .so.1, .so.2.3, etc.) and extensionless executables
-        let dominated_by_so = name.contains(".so");
-        if dominated_by_so && is_elf(path) {
-            results.push(path.to_path_buf());
-        } else if !name.contains('.') && is_elf(path) {
-            // Extensionless files that are ELF (e.g., python3.12 binary)
+        if is_native(path) {
             results.push(path.to_path_buf());
         }
     }
     results
 }
 
-/// Find Mach-O binaries in a directory (macOS .dylib and .so files).
+/// Find ELF binaries in a directory (real files only; symlinks skipped).
+pub fn find_elf_binaries(dir: &Path) -> Vec<PathBuf> {
+    find_native_by_magic(dir, is_elf)
+}
+
+/// Find Mach-O binaries in a directory (real files only; symlinks skipped).
 pub fn find_macho_binaries(dir: &Path) -> Vec<PathBuf> {
-    let mut results = Vec::new();
-    for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-        // Match .dylib, .so files, and extensionless executables
-        let is_dylib = name.contains(".dylib");
-        let is_so = name.contains(".so");
-        if (is_dylib || is_so) && is_macho(path) {
-            results.push(path.to_path_buf());
-        } else if !name.contains('.') && is_macho(path) {
-            // Extensionless files that are Mach-O (e.g., python3.12 binary)
-            results.push(path.to_path_buf());
-        }
-    }
-    results
+    find_native_by_magic(dir, is_macho)
 }
 
 /// Find native binaries in a directory (platform-aware).
@@ -610,4 +603,61 @@ pub fn patch_directory(dir: &Path, config: &PatchConfig) -> anyhow::Result<()> {
         dir.display()
     );
     patch_binaries(&binaries, config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Write a file whose first 4 bytes are the ELF magic so `is_elf` matches.
+    fn write_elf(path: &Path) {
+        fs::write(path, b"\x7fELF\x02\x01\x01\x00rest").unwrap();
+    }
+
+    /// A Python `bin/` directory has the real `python3.X` binary plus `python`
+    /// and `python3` symlinks pointing at it. The finder must return only the
+    /// real binary — patching a symlink rewrites the real target through the
+    /// link, corrupting/redundantly patching it. The real binary's name
+    /// (`python3.12`) contains a version dot, so it must be matched by magic
+    /// bytes, not a filename heuristic.
+    #[cfg(unix)]
+    #[test]
+    fn find_elf_binaries_skips_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("python3.12");
+        write_elf(&real);
+        symlink("python3.12", dir.path().join("python")).unwrap();
+        symlink("python3.12", dir.path().join("python3")).unwrap();
+
+        // A non-binary script sharing the bin/ dir must be ignored.
+        fs::write(dir.path().join("2to3-3.12"), b"#!/bin/sh\nexec python3\n").unwrap();
+
+        let found = find_elf_binaries(dir.path());
+
+        assert_eq!(
+            found,
+            vec![real],
+            "expected only the real python3.12 binary, got: {found:?}"
+        );
+    }
+
+    /// A `.so` accessed via a versioned symlink (e.g. `libfoo.so -> libfoo.so.1`)
+    /// must likewise be patched once, via the real file only.
+    #[cfg(unix)]
+    #[test]
+    fn find_elf_binaries_skips_versioned_so_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("libfoo.so.1");
+        write_elf(&real);
+        symlink("libfoo.so.1", dir.path().join("libfoo.so")).unwrap();
+
+        let found = find_elf_binaries(dir.path());
+
+        assert_eq!(found, vec![real]);
+    }
 }
