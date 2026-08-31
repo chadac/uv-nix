@@ -127,9 +127,9 @@ dependencies = [
 
 [[package]]
 name = "archive-trait"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc23b595ad4092163eaf9c0c7532dd5b6d82274c21560c97dc03fa4e4f09e645"
+checksum = "c6080ea14ccf9019d7ce572c319e581c20a805c9bdc6dbfb9b988da003cbd1a3"
 dependencies = [
  "cap-std",
  "thiserror",
@@ -708,9 +708,9 @@ dependencies = [
 
 [[package]]
 name = "cap-primitives"
-version = "4.0.2"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdadbd7c002d3a484b35243669abdae85a0ebaded5a61117169dc3400f9a7ff0"
+checksum = "8b5f74729fd2f44701d1a8eb47e906cdb3ccd9ec0f02baad85a744b791940b18"
 dependencies = [
  "ambient-authority",
  "fs-set-times",
@@ -726,9 +726,9 @@ dependencies = [
 
 [[package]]
 name = "cap-std"
-version = "4.0.2"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7281235d6e96d3544ca18bba9049be92f4190f8d923e3caef1b5f66cfa752608"
+checksum = "c1ec78e242cfa2cfe276807ac2ecc00315a6c97786977414bcd1c3963b6c91b8"
 dependencies = [
  "cap-primitives",
  "io-extras",
@@ -2512,15 +2512,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "is-docker"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "928bae27f42bc99b60d9ac7334e3a21d10ad8f1835a4e12ec3ec0464765ed1b3"
-dependencies = [
- "once_cell",
-]
-
-[[package]]
 name = "is-terminal"
 version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2529,16 +2520,6 @@ dependencies = [
  "hermit-abi",
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "is-wsl"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "173609498df190136aa7dea1a91db051746d339e18476eed5ca40521f02d7aa5"
-dependencies = [
- "is-docker",
- "once_cell",
 ]
 
 [[package]]
@@ -3176,16 +3157,6 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
-
-[[package]]
-name = "open"
-version = "5.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0b3d059e795d52b8a72fef45658620edd4d9c359b338564aa14391ffa511ed5"
-dependencies = [
- "is-wsl",
- "libc",
-]
 
 [[package]]
 name = "openssl-probe"
@@ -5125,9 +5096,9 @@ checksum = "eddb6b06d20fba9ed21fca3d696ee1b6e870bca0bcf9fa2971f6ae2436de576a"
 
 [[package]]
 name = "tar-codec"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f718b1f470b8ff575d12c85c33bdc8b33743009669c7a5e1923b6583235a2258"
+checksum = "7ea42eb144d30fcbf32c26dfea8959175bb8335bfb7b18d20c6ed32edecf0551"
 dependencies = [
  "archive-trait",
  "tar-framing",
@@ -5137,9 +5108,9 @@ dependencies = [
 
 [[package]]
 name = "tar-framing"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aca504a58616b04eb381819c4ddfdf87b6d35f6699090e68d8b40954fb42da7"
+checksum = "783223a7a6590be4227cb821e7ce80372575511f67c824921aba0752d8ad5573"
 dependencies = [
  "thiserror",
  "tokio",
@@ -5905,16 +5876,14 @@ dependencies = [
 
 [[package]]
 name = "uv"
-version = "0.12.6"
+version = "0.12.7"
 dependencies = [
  "anstream",
  "anyhow",
  "assert_cmd",
  "assert_fs",
- "astral-tokio-tar",
  "astral-version-ranges",
  "astral_async_zip",
- "async-compression",
  "axoupdater",
  "backon",
  "byteorder",
@@ -5945,7 +5914,6 @@ dependencies = [
  "jiff",
  "miette",
  "nix 0.31.3",
- "open",
  "owo-colors",
  "petgraph",
  "predicates",
@@ -5973,7 +5941,6 @@ dependencies = [
  "tracing-tree",
  "unicode-width 0.2.2",
  "url",
- "uuid",
  "uv-audit",
  "uv-auth",
  "uv-bin-install",
@@ -6036,7 +6003,7 @@ dependencies = [
 
 [[package]]
 name = "uv-audit"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "astral-reqwest-middleware",
  "clap",
@@ -6067,25 +6034,21 @@ dependencies = [
 
 [[package]]
 name = "uv-auth"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
- "arcstr",
  "astral-reqwest-middleware",
  "async-trait",
  "base64 0.22.1",
- "etcetera",
  "fs-err",
  "http",
  "insta",
- "jiff",
  "percent-encoding",
  "reqsign",
  "reqwest",
  "rustc-hash",
  "schemars",
  "serde",
- "serde_json",
  "tempfile",
  "test-log",
  "thiserror",
@@ -6093,7 +6056,6 @@ dependencies = [
  "toml",
  "tracing",
  "url",
- "uv-cache-key",
  "uv-fs",
  "uv-keyring",
  "uv-netrc",
@@ -6109,7 +6071,7 @@ dependencies = [
 
 [[package]]
 name = "uv-bench"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "astral_async_zip",
@@ -6119,7 +6081,6 @@ dependencies = [
  "fs-err",
  "futures",
  "jiff",
- "rmp-serde",
  "serde_json",
  "sha2 0.11.0",
  "tar-codec",
@@ -6152,7 +6113,7 @@ dependencies = [
 
 [[package]]
 name = "uv-bin-install"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "astral-reqwest-middleware",
  "astral-reqwest-retry",
@@ -6180,7 +6141,7 @@ dependencies = [
 
 [[package]]
 name = "uv-build"
-version = "0.12.6"
+version = "0.12.7"
 dependencies = [
  "anstream",
  "anyhow",
@@ -6195,7 +6156,7 @@ dependencies = [
 
 [[package]]
 name = "uv-build-backend"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anstream",
  "astral-tokio-tar",
@@ -6245,7 +6206,7 @@ dependencies = [
 
 [[package]]
 name = "uv-build-frontend"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anstream",
  "fs-err",
@@ -6284,7 +6245,7 @@ dependencies = [
 
 [[package]]
 name = "uv-cache"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "clap",
  "fs-err",
@@ -6310,7 +6271,7 @@ dependencies = [
 
 [[package]]
 name = "uv-cache-info"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "fs-err",
@@ -6327,7 +6288,7 @@ dependencies = [
 
 [[package]]
 name = "uv-cache-key"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "hex",
  "memchr",
@@ -6339,7 +6300,7 @@ dependencies = [
 
 [[package]]
 name = "uv-cli"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anstream",
  "anyhow",
@@ -6372,7 +6333,7 @@ dependencies = [
 
 [[package]]
 name = "uv-client"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "astral-reqwest-middleware",
@@ -6446,7 +6407,7 @@ dependencies = [
 
 [[package]]
 name = "uv-configuration"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "clap",
@@ -6481,14 +6442,14 @@ dependencies = [
 
 [[package]]
 name = "uv-console"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "console",
 ]
 
 [[package]]
 name = "uv-dev"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anstream",
  "anyhow",
@@ -6544,7 +6505,7 @@ dependencies = [
 
 [[package]]
 name = "uv-dirs"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "assert_fs",
  "etcetera",
@@ -6556,7 +6517,7 @@ dependencies = [
 
 [[package]]
 name = "uv-dispatch"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "futures",
@@ -6591,7 +6552,7 @@ dependencies = [
 
 [[package]]
 name = "uv-distribution"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "astral-reqwest-middleware",
@@ -6643,7 +6604,7 @@ dependencies = [
 
 [[package]]
 name = "uv-distribution-filename"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "insta",
  "memchr",
@@ -6660,7 +6621,7 @@ dependencies = [
 
 [[package]]
 name = "uv-distribution-types"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "arcstr",
  "astral-version-ranges",
@@ -6702,7 +6663,7 @@ dependencies = [
 
 [[package]]
 name = "uv-errors"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anstream",
  "anyhow",
@@ -6717,7 +6678,7 @@ dependencies = [
 
 [[package]]
 name = "uv-extract"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "astral-tokio-tar",
@@ -6752,7 +6713,7 @@ dependencies = [
 
 [[package]]
 name = "uv-fastid"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "rand 0.9.4",
  "serde",
@@ -6761,14 +6722,14 @@ dependencies = [
 
 [[package]]
 name = "uv-flags"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "bitflags 2.13.1",
 ]
 
 [[package]]
 name = "uv-fs"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "backon",
  "clap",
@@ -6801,7 +6762,7 @@ dependencies = [
 
 [[package]]
 name = "uv-git"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "astral-reqwest-middleware",
@@ -6827,7 +6788,7 @@ dependencies = [
 
 [[package]]
 name = "uv-git-types"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "percent-encoding",
  "serde",
@@ -6841,7 +6802,7 @@ dependencies = [
 
 [[package]]
 name = "uv-globfilter"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anstream",
  "fs-err",
@@ -6858,7 +6819,7 @@ dependencies = [
 
 [[package]]
 name = "uv-install-wheel"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "assert_fs",
@@ -6895,7 +6856,7 @@ dependencies = [
 
 [[package]]
 name = "uv-installer"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anstream",
  "anyhow",
@@ -6939,7 +6900,7 @@ dependencies = [
 
 [[package]]
 name = "uv-keyring"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -6955,7 +6916,7 @@ dependencies = [
 
 [[package]]
 name = "uv-logging"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anstream",
  "jiff",
@@ -6966,7 +6927,7 @@ dependencies = [
 
 [[package]]
 name = "uv-macros"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6977,7 +6938,7 @@ dependencies = [
 
 [[package]]
 name = "uv-metadata"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "astral_async_zip",
  "fs-err",
@@ -6993,7 +6954,7 @@ dependencies = [
 
 [[package]]
 name = "uv-netrc"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "fs-err",
  "shellexpand",
@@ -7023,7 +6984,7 @@ dependencies = [
 
 [[package]]
 name = "uv-normalize"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "rkyv",
  "schemars",
@@ -7033,7 +6994,7 @@ dependencies = [
 
 [[package]]
 name = "uv-once-map"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "futures",
  "papaya",
@@ -7042,14 +7003,14 @@ dependencies = [
 
 [[package]]
 name = "uv-options-metadata"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "uv-pep440"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "astral-version-ranges",
  "indoc",
@@ -7063,7 +7024,7 @@ dependencies = [
 
 [[package]]
 name = "uv-pep508"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "arcstr",
  "astral-version-ranges",
@@ -7093,7 +7054,7 @@ dependencies = [
 
 [[package]]
 name = "uv-performance-memory-allocator"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "mimalloc",
  "tikv-jemallocator",
@@ -7101,7 +7062,7 @@ dependencies = [
 
 [[package]]
 name = "uv-platform"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "fs-err",
  "goblin",
@@ -7122,7 +7083,7 @@ dependencies = [
 
 [[package]]
 name = "uv-platform-tags"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "bitflags 2.13.1",
  "insta",
@@ -7136,7 +7097,7 @@ dependencies = [
 
 [[package]]
 name = "uv-preview"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "enumflags2",
  "itertools 0.14.0",
@@ -7150,7 +7111,7 @@ dependencies = [
 
 [[package]]
 name = "uv-publish"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "ambient-id",
  "anstream",
@@ -7196,7 +7157,7 @@ dependencies = [
 
 [[package]]
 name = "uv-pypi-types"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.1",
@@ -7229,7 +7190,7 @@ dependencies = [
 
 [[package]]
 name = "uv-python"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "assert_fs",
@@ -7294,7 +7255,7 @@ dependencies = [
 
 [[package]]
 name = "uv-redacted"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "ref-cast",
  "schemars",
@@ -7305,7 +7266,7 @@ dependencies = [
 
 [[package]]
 name = "uv-requirements"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "configparser",
@@ -7339,7 +7300,7 @@ dependencies = [
 
 [[package]]
 name = "uv-requirements-txt"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "assert_fs",
@@ -7373,7 +7334,7 @@ dependencies = [
 
 [[package]]
 name = "uv-resolver"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "arcstr",
  "astral-pubgrub",
@@ -7444,7 +7405,7 @@ dependencies = [
 
 [[package]]
 name = "uv-scripts"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "fs-err",
  "indoc",
@@ -7469,7 +7430,7 @@ dependencies = [
 
 [[package]]
 name = "uv-settings"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "clap",
  "fs-err",
@@ -7508,7 +7469,7 @@ dependencies = [
 
 [[package]]
 name = "uv-shell"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "fs-err",
@@ -7525,7 +7486,7 @@ dependencies = [
 
 [[package]]
 name = "uv-small-str"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "arcstr",
  "rkyv",
@@ -7535,7 +7496,7 @@ dependencies = [
 
 [[package]]
 name = "uv-state"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "tempfile",
  "uv-dirs",
@@ -7543,7 +7504,7 @@ dependencies = [
 
 [[package]]
 name = "uv-static"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "thiserror",
  "uv-macros",
@@ -7551,7 +7512,7 @@ dependencies = [
 
 [[package]]
 name = "uv-test"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -7597,14 +7558,14 @@ dependencies = [
 
 [[package]]
 name = "uv-toml"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "uv-tool"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "fs-err",
  "owo-colors",
@@ -7634,7 +7595,7 @@ dependencies = [
 
 [[package]]
 name = "uv-torch"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "clap",
  "either",
@@ -7648,13 +7609,12 @@ dependencies = [
  "uv-normalize",
  "uv-pep440",
  "uv-platform-tags",
- "uv-static",
  "windows",
 ]
 
 [[package]]
 name = "uv-trampoline-builder"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -7673,7 +7633,7 @@ dependencies = [
 
 [[package]]
 name = "uv-types"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "papaya",
@@ -7696,7 +7656,7 @@ dependencies = [
 
 [[package]]
 name = "uv-unix"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "nix 0.31.3",
  "thiserror",
@@ -7704,11 +7664,11 @@ dependencies = [
 
 [[package]]
 name = "uv-version"
-version = "0.12.6"
+version = "0.12.7"
 
 [[package]]
 name = "uv-virtualenv"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "console",
  "fs-err",
@@ -7730,7 +7690,7 @@ dependencies = [
 
 [[package]]
 name = "uv-warnings"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anstream",
  "anyhow",
@@ -7742,7 +7702,7 @@ dependencies = [
 
 [[package]]
 name = "uv-windows"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "arrayvec",
  "windows",
@@ -7750,7 +7710,7 @@ dependencies = [
 
 [[package]]
 name = "uv-workspace"
-version = "0.0.73"
+version = "0.0.74"
 dependencies = [
  "anyhow",
  "assert_fs",
