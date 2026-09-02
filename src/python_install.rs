@@ -173,15 +173,11 @@ pub fn find_nixpkgs_python(
 /// Resolve a Python binary path from nixpkgs.
 fn resolve_python_from_nixpkgs(attr: &str, source: &nixpkgs::NixpkgsSource) -> Result<PathBuf> {
     let pkgs_expr = nixpkgs::nixpkgs_import_expr(source);
-    let expr = format!(
-        "({}){}",
-        pkgs_expr,
-        if attr == "python3" {
-            ""
-        } else {
-            &format!(".{}", attr)
-        }
-    );
+    let expr = if attr == "python3" {
+        format!("({})", pkgs_expr)
+    } else {
+        format!("({}).{}", pkgs_expr, attr)
+    };
 
     let mut cmd = crate::nix_command();
     cmd.args(["build", "--no-link", "--print-out-paths"]);
