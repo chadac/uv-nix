@@ -738,18 +738,14 @@ pub fn patch_python(
 /// during `uv pip install`.
 pub fn is_venv_patched(venv_path: &Path) -> bool {
     let cfg_path = venv_path.join("pyvenv.cfg");
-    if !cfg_path.exists() {
-        return false;
-    }
-
-    let content = match fs::read_to_string(&cfg_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    // Check for uv-nix markers that are written during patching
-    content.lines().any(|line| {
-        line.starts_with("uv-nix-nixpkgs-source")
-            || line.starts_with("uv-nix-nixpkgs-rev")
-    })
+    
+    fs::read_to_string(&cfg_path)
+        .map(|content| {
+            content.lines().any(|line| {
+                line.starts_with("uv-nix-nixpkgs-source")
+                    || line.starts_with("uv-nix-nixpkgs-rev")
+            })
+        })
+        .unwrap_or(false)
+}
 }
