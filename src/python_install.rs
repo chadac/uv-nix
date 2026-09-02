@@ -139,33 +139,30 @@ pub fn find_nixpkgs_python(
     // If a specific minor version is requested, try to find that exact version
     if let Some((major, minor)) = requirement.minor {
         let attr = format!("python{}{}", major, minor);
-        if let Ok(python_path) = resolve_python_from_nixpkgs(&attr, &source) {
-            // Verify the version matches
-            if let Ok(version) = get_python_version(&python_path) {
-                if requirement.version.matches(&version) {
-                    debug!(
-                        "Found matching nixpkgs Python {}.{}: {}",
-                        major,
-                        minor,
-                        python_path.display()
-                    );
-                    return Ok(Some(python_path));
-                }
-            }
+        if let Ok(python_path) = resolve_python_from_nixpkgs(&attr, &source)
+            && let Ok(version) = get_python_version(&python_path)
+            && requirement.version.matches(&version)
+        {
+            debug!(
+                "Found matching nixpkgs Python {}.{}: {}",
+                major,
+                minor,
+                python_path.display()
+            );
+            return Ok(Some(python_path));
         }
     }
 
     // Try python3 (default)
-    if let Ok(python_path) = resolve_python_from_nixpkgs("python3", &source) {
-        if let Ok(version) = get_python_version(&python_path) {
-            if requirement.version.matches(&version) {
-                debug!(
-                    "Found matching default nixpkgs Python: {}",
-                    python_path.display()
-                );
-                return Ok(Some(python_path));
-            }
-        }
+    if let Ok(python_path) = resolve_python_from_nixpkgs("python3", &source)
+        && let Ok(version) = get_python_version(&python_path)
+        && requirement.version.matches(&version)
+    {
+        debug!(
+            "Found matching default nixpkgs Python: {}",
+            python_path.display()
+        );
+        return Ok(Some(python_path));
     }
 
     Ok(None)
