@@ -4,10 +4,10 @@
 //! instead of uv's managed Python installations when a compatible version
 //! is available.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use anyhow::{Context, Result};
 use semver::VersionReq;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use tracing::debug;
 
 use crate::{config, nixpkgs};
@@ -45,16 +45,16 @@ pub fn find_python_requirement(project_dir: &Path) -> Option<PythonRequirement> 
 /// Read Python version from `.python-version` file.
 fn read_python_version_file(project_dir: &Path) -> Option<PythonRequirement> {
     let path = project_dir.join(".python-version");
-    let content = std::fs::read_to_string(&path).ok()?.trim().to_string();
-    
+    let content = fs::read_to_string(&path).ok()?.trim().to_string();
+
     parse_python_version(&content)
 }
 
 /// Read Python version requirement from `uv.lock`.
 fn read_uv_lock_python(project_dir: &Path) -> Option<PythonRequirement> {
     let path = project_dir.join("uv.lock");
-    let content = std::fs::read_to_string(&path).ok()?;
-    
+    let content = fs::read_to_string(&path).ok()?;
+
     // Look for "requires-python = " line
     for line in content.lines() {
         if let Some(version_str) = line.strip_prefix("requires-python = ") {
@@ -62,22 +62,19 @@ fn read_uv_lock_python(project_dir: &Path) -> Option<PythonRequirement> {
             return parse_python_version(version_str);
         }
     }
-    
+
     None
 }
 
 /// Read Python version requirement from `pyproject.toml`.
 fn read_pyproject_python(project_dir: &Path) -> Option<PythonRequirement> {
     let path = project_dir.join("pyproject.toml");
-    let content = std::fs::read_to_string(&path).ok()?;
+    let content = fs::read_to_string(&path).ok()?;
     let doc: toml::Value = toml::from_str(&content).ok()?;
-    
+
     // Look for [project].requires-python
-    let requires_python = doc
-        .get("project")?
-        .get("requires-python")?
-        .as_str()?;
-    
+    let requires_python = doc.get("project")?.get("requires-python")?.as_str()?;
+
     parse_python_version(requires_python)
 }
 
@@ -89,7 +86,7 @@ fn read_pyproject_python(project_dir: &Path) -> Option<PythonRequirement> {
 /// - ">=3.10,<3.13" -> version range
 fn parse_python_version(version_str: &str) -> Option<PythonRequirement> {
     let version_str = version_str.trim();
-    
+
     // If it's a simple "3.12" format, extract minor version
     if let Some((major, minor)) = parse_simple_version(version_str) {
         // Create a semver range for the minor version (3.12.* matches 3.12.0-3.12.999)
@@ -101,7 +98,7 @@ fn parse_python_version(version_str: &str) -> Option<PythonRequirement> {
             });
         }
     }
-    
+
     // Try parsing as semver range
     if let Ok(version) = VersionReq::parse(version_str) {
         return Some(PythonRequirement {
@@ -109,7 +106,7 @@ fn parse_python_version(version_str: &str) -> Option<PythonRequirement> {
             minor: None,
         });
     }
-    
+
     None
 }
 
@@ -137,7 +134,7 @@ pub fn find_nixpkgs_python(
         .map(|(c, _)| c)
         .unwrap_or_default();
     let source = nixpkgs::resolve_nixpkgs(project_dir, &uv_nix_config);
-    
+
     // If a specific minor version is requested, try to find that exact version
     if let Some((major, minor)) = requirement.minor {
         let attr = format!("python{}{}", major, minor);
@@ -147,14 +144,16 @@ pub fn find_nixpkgs_python(
                 if requirement.version.matches(&version) {
                     debug!(
                         "Found matching nixpkgs Python {}.{}: {}",
-                        major, minor, python_path.display()
+                        major,
+                        minor,
+                        python_path.display()
                     );
                     return Ok(Some(python_path));
                 }
             }
         }
     }
-    
+
     // Try python3 (default)
     if let Ok(python_path) = resolve_python_from_nixpkgs("python3", &source) {
         if let Ok(version) = get_python_version(&python_path) {
@@ -167,36 +166,41 @@ pub fn find_nixpkgs_python(
             }
         }
     }
-    
+
     Ok(None)
 }
 
 /// Resolve a Python binary path from nixpkgs.
-fn resolve_python_from_nixpkgs(
-    attr: &str,
-    source: &nixpkgs::NixpkgsSource,
-) -> Result<PathBuf> {
+fn resolve_python_from_nixpkgs(attr: &str, source: &nixpkgs::NixpkgsSource) -> Result<PathBuf> {
     let pkgs_expr = nixpkgs::nixpkgs_import_expr(source);
-    let expr = format!("({}){}", pkgs_expr, if attr == "python3" { "" } else { &format!(".{}", attr) });
-    
+    let expr = format!(
+        "({}){}",
+        pkgs_expr,
+        if attr == "python3" {
+            ""
+        } else {
+            &format!(".{}", attr)
+        }
+    );
+
     let mut cmd = crate::nix_command();
     cmd.args(["build", "--no-link", "--print-out-paths"]);
     if nixpkgs::requires_impure(source) {
         cmd.arg("--impure");
     }
-    let output = cmd.arg("--expr").arg(&expr)
+    let output = cmd
+        .arg("--expr")
+        .arg(&expr)
         .output()
         .context("Failed to run nix build")?;
-    
+
     if !output.status.success() {
         anyhow::bail!("nix build failed for {}", attr);
     }
-    
-    let store_path = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_string();
+
+    let store_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let python_bin = PathBuf::from(store_path).join("bin").join("python3");
-    
+
     if python_bin.exists() {
         Ok(python_bin)
     } else {
@@ -210,19 +214,18 @@ fn get_python_version(python_bin: &Path) -> Result<semver::Version> {
         .arg("--version")
         .output()
         .context("Failed to get Python version")?;
-    
+
     if !output.status.success() {
         anyhow::bail!("Failed to get Python version");
     }
-    
+
     // Parse "Python 3.12.1" -> "3.12.1"
     let version_str = String::from_utf8_lossy(&output.stdout);
     let version_str = version_str
         .trim()
         .strip_prefix("Python ")
         .context("Invalid Python version output")?;
-    
+
     semver::Version::parse(version_str)
         .with_context(|| format!("Failed to parse Python version: {}", version_str))
 }
-

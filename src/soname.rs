@@ -160,7 +160,7 @@ fn read_elf_needed(
 /// in one package (e.g. scipy) may reference a vendored lib bundled by
 /// another package (e.g. numpy.libs/libscipy_openblas64_.so).
 fn find_in_libs_dir(site_packages: &Path, soname: &str) -> bool {
-    if let Ok(entries) = std::fs::read_dir(site_packages) {
+    if let Ok(entries) = fs::read_dir(site_packages) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
@@ -398,7 +398,7 @@ fn resolve_sonames_via_rpath_scan(
         if !lib_path.exists() {
             continue;
         }
-        let entries = match std::fs::read_dir(lib_path) {
+        let entries = match fs::read_dir(lib_path) {
             Ok(e) => e,
             Err(_) => continue,
         };
@@ -457,7 +457,7 @@ impl PatchManifest {
     /// Load an existing manifest from disk, or return an empty one.
     pub fn load_or_default(venv: &Path) -> Self {
         let path = Self::manifest_path(venv);
-        match std::fs::read_to_string(&path) {
+        match fs::read_to_string(&path) {
             Ok(content) => serde_json::from_str(&content).unwrap_or_else(|err| {
                 warn!("Failed to parse patches.json, starting fresh: {err}");
                 Self::empty("")
@@ -470,10 +470,10 @@ impl PatchManifest {
     pub fn save(&self, venv: &Path) -> anyhow::Result<()> {
         let path = Self::manifest_path(venv);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, content)?;
+        fs::write(&path, content)?;
         debug!("Saved patch manifest to {}", path.display());
         Ok(())
     }
@@ -675,7 +675,7 @@ pub fn generate_soname_map_for_platform(
             continue;
         }
 
-        let entries = match std::fs::read_dir(&lib_dir) {
+        let entries = match fs::read_dir(&lib_dir) {
             Ok(e) => e,
             Err(err) => {
                 debug!("  {attr}: failed to read lib/ dir: {err}");
@@ -847,7 +847,7 @@ mod tests {
     fn test_manifest_save_load() {
         let dir = tempfile::tempdir().unwrap();
         let venv = dir.path().join(".venv");
-        std::fs::create_dir_all(&venv).unwrap();
+        fs::create_dir_all(&venv).unwrap();
 
         let mut m = PatchManifest::empty("rev123");
         m.upsert_package(

@@ -207,13 +207,13 @@ fn dirs_or_home() -> Option<PathBuf> {
 /// Load a cached NixConfig from `~/.cache/uv-nix/<hash>.json`.
 fn load_cache(key: &str) -> Option<NixConfig> {
     let path = cache_dir()?.join(format!("{key}.json"));
-    let content = std::fs::read_to_string(&path).ok()?;
+    let content = fs::read_to_string(&path).ok()?;
     let config: NixConfig = serde_json::from_str(&content).ok()?;
 
     // Validate that key paths still exist
     if !config.patcher.exists() {
         debug!("Cached NixConfig patcher path no longer exists, invalidating");
-        let _ = std::fs::remove_file(&path);
+        let _ = fs::remove_file(&path);
         return None;
     }
     // On Linux, also check interpreter exists
@@ -222,7 +222,7 @@ fn load_cache(key: &str) -> Option<NixConfig> {
         && !config.interpreter.exists()
     {
         debug!("Cached NixConfig interpreter path no longer exists, invalidating");
-        let _ = std::fs::remove_file(&path);
+        let _ = fs::remove_file(&path);
         return None;
     }
 
@@ -232,10 +232,10 @@ fn load_cache(key: &str) -> Option<NixConfig> {
 /// Save a NixConfig to `~/.cache/uv-nix/<hash>.json`.
 fn save_cache(key: &str, config: &NixConfig) -> anyhow::Result<()> {
     let dir = cache_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine cache directory"))?;
-    std::fs::create_dir_all(&dir)?;
+    fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{key}.json"));
     let content = serde_json::to_string_pretty(config)?;
-    std::fs::write(&path, content)?;
+    fs::write(&path, content)?;
     debug!("Cached NixConfig at {}", path.display());
     Ok(())
 }
@@ -430,9 +430,9 @@ mod tests {
     #[test]
     fn test_find_project_root_with_flake_lock() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("flake.lock"), "{}").unwrap();
+        fs::write(dir.path().join("flake.lock"), "{}").unwrap();
         let sub = dir.path().join("src").join("deep");
-        std::fs::create_dir_all(&sub).unwrap();
+        fs::create_dir_all(&sub).unwrap();
 
         let root = find_project_root(&sub).unwrap();
         assert_eq!(root, dir.path());
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn test_find_project_root_with_pyproject() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
+        fs::write(
             dir.path().join("pyproject.toml"),
             "[project]\nname = \"test\"",
         )
@@ -455,7 +455,7 @@ mod tests {
     fn test_cache_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let cache_path = dir.path().join("uv-nix");
-        std::fs::create_dir_all(&cache_path).unwrap();
+        fs::create_dir_all(&cache_path).unwrap();
 
         let config = NixConfig {
             patcher: PathBuf::from("/nix/store/xxx/bin/patchelf"),
@@ -471,11 +471,11 @@ mod tests {
 
         let json_path = cache_path.join("test-key.json");
         let content = serde_json::to_string_pretty(&config).unwrap();
-        std::fs::write(&json_path, content).unwrap();
+        fs::write(&json_path, content).unwrap();
         assert!(json_path.exists());
 
         let loaded: NixConfig =
-            serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+            serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
         assert_eq!(loaded.patcher, config.patcher);
         assert_eq!(loaded.rpath, config.rpath);
         assert_eq!(loaded.library_path, config.library_path);

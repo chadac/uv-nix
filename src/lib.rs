@@ -1,4 +1,4 @@
-use std::fs;
+use fs_err as fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -602,7 +602,7 @@ fn is_musl_python(python_dir: &Path) -> bool {
 pub fn check_nixpkgs_python_available(project_dir: &Path) -> Option<PathBuf> {
     // Find Python requirement from project files
     let requirement = python_install::find_python_requirement(project_dir)?;
-    
+
     // Check if nixpkgs has a matching Python
     match python_install::find_nixpkgs_python(project_dir, &requirement) {
         Ok(Some(path)) => Some(path),
@@ -641,13 +641,12 @@ pub fn post_python_install_patch(python_dir: &Path) {
     // If UV_NIX_PREFER_NIXPKGS_PYTHON=1, inform the user
     if std::env::var("UV_NIX_PREFER_NIXPKGS_PYTHON").is_ok_and(|v| v == "1") {
         use std::io::IsTerminal;
-        
+
         // Only show informational messages in interactive terminals
-        if std::io::stderr().is_terminal() 
-            && std::env::var("UV_NIX_SUPPRESS_WARNINGS").is_err() {
+        if std::io::stderr().is_terminal() && std::env::var("UV_NIX_SUPPRESS_WARNINGS").is_err() {
             let cwd = std::env::current_dir().unwrap_or_default();
             let project_dir = nix_config::find_project_root(&cwd).unwrap_or(cwd);
-            
+
             if let Some(nixpkgs_python) = check_nixpkgs_python_available(&project_dir) {
                 status_warn(&format!(
                     "A compatible nixpkgs Python is available at {}",
@@ -656,9 +655,7 @@ pub fn post_python_install_patch(python_dir: &Path) {
                 eprintln!(
                     "     Consider using it in your dev environment instead of managed Python."
                 );
-                eprintln!(
-                    "     See uv-nix documentation for nix-managed Python setup."
-                );
+                eprintln!("     See uv-nix documentation for nix-managed Python setup.");
             }
         }
     }
