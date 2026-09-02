@@ -667,6 +667,18 @@ fn mark_venv_warned(venv: &Path) {
 /// This should be called early in uv commands that use a venv.
 /// Shows a one-time warning suggesting to run `uv nix patch`.
 pub fn warn_if_unpatched_venv(venv: &Path) {
+    use std::io::IsTerminal;
+    
+    // Skip if warning is suppressed (for tests)
+    if std::env::var("UV_NIX_SUPPRESS_WARNINGS").is_ok() {
+        return;
+    }
+    
+    // Skip if not in an interactive terminal (avoid polluting test output)
+    if !std::io::stderr().is_terminal() {
+        return;
+    }
+    
     // Skip if we're not in a Nix environment
     if std::env::var("NIX_STORE").is_err() && !Path::new("/nix/store").exists() {
         return;
