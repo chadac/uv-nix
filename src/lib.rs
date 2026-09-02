@@ -52,10 +52,6 @@ pub use cli::{CliOutput, InfoOptions, PatchOptions};
 pub use cli::{nix_info, nix_patch};
 pub use nixgen::{GenOptions, nix_gen};
 
-// Re-export venv checking functions
-pub use is_venv_patched;
-pub use warn_if_unpatched_venv;
-
 /// Create a `nix` command with the required experimental features enabled.
 ///
 /// All `nix` subcommands (build, eval, etc.) need `nix-command`.
