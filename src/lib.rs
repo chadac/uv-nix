@@ -649,12 +649,10 @@ pub fn post_python_install_patch(python_dir: &Path) {
                 nixpkgs_python.display()
             ));
             eprintln!(
-                "     {}",
-                "Consider using it in your dev environment instead of managed Python."
+                "     Consider using it in your dev environment instead of managed Python."
             );
             eprintln!(
-                "     {}",
-                "See uv-nix documentation for nix-managed Python setup."
+                "     See uv-nix documentation for nix-managed Python setup."
             );
         }
     }
