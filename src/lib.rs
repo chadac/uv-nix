@@ -744,8 +744,3 @@ pub fn is_venv_patched(venv_path: &Path) -> bool {
         line.starts_with("uv-nix-nixpkgs-source")
             || line.starts_with("uv-nix-nixpkgs-rev")
     })
-}
-
-/// Check if a directory contains a virtual environment.
-///
-/// Returns the venv path if found, otherwise None.
