@@ -660,8 +660,11 @@ pub fn post_python_install_patch(python_dir: &Path) {
         }
     }
 
-    // Nix is required — require() exits with error if not available
-    let _nix = nix_config::require();
+    // Skip if Nix is not available (non-NixOS system)
+    if nix_config::get().is_none() {
+        debug!("Skipping patching for non-Nix system");
+        return;
+    }
 
     let config = patchelf::PatchConfig::from_env();
 
