@@ -634,12 +634,9 @@ pub fn post_python_install_patch(python_dir: &Path) {
 /// Returns `true` if the venv's `pyvenv.cfg` contains the `uv-nix-warned` marker.
 fn has_warned_about_venv(venv: &Path) -> bool {
     let cfg_path = venv.join("pyvenv.cfg");
-    let content = match fs::read_to_string(&cfg_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    content.contains("uv-nix-warned = true")
+    fs::read_to_string(&cfg_path)
+        .map(|content| content.contains("uv-nix-warned = true"))
+        .unwrap_or(false)
 }
 
 /// Mark that we've warned about an unpatched venv.
@@ -647,9 +644,8 @@ fn has_warned_about_venv(venv: &Path) -> bool {
 /// Appends `uv-nix-warned = true` to the venv's `pyvenv.cfg`.
 fn mark_venv_warned(venv: &Path) {
     let cfg_path = venv.join("pyvenv.cfg");
-    let content = match fs::read_to_string(&cfg_path) {
-        Ok(c) => c,
-        Err(_) => return,
+    let Ok(content) = fs::read_to_string(&cfg_path) else {
+        return;
     };
 
     // Append the marker
@@ -659,7 +655,7 @@ fn mark_venv_warned(venv: &Path) {
     }
     output.push_str("uv-nix-warned = true\n");
 
-    let _ = fs::write(&cfg_path, output);
+    fs::write(&cfg_path, output).ok();
 }
 
 /// Warn if the venv is unpatched and we haven't warned yet.
@@ -756,3 +752,4 @@ pub fn is_venv_patched(venv_path: &Path) -> bool {
         line.starts_with("uv-nix-nixpkgs-source")
             || line.starts_with("uv-nix-nixpkgs-rev")
     })
+}
