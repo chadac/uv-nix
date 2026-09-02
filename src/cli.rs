@@ -7,6 +7,7 @@
 //! - Status/progress messages → stderr (dimmed)
 //! - Data output (info, JSON) → stdout
 //! - Completion messages → stderr (with colors)
+use fs_err as fs;
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};

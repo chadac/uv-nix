@@ -3,6 +3,7 @@
 //! This module provides logic to detect and prefer Python from nixpkgs
 //! instead of uv's managed Python installations when a compatible version
 //! is available.
+use fs_err as fs;
 
 use anyhow::{Context, Result};
 use semver::VersionReq;

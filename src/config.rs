@@ -1,3 +1,4 @@
+use fs_err as fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};

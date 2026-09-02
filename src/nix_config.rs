@@ -1,3 +1,4 @@
+use fs_err as fs;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
