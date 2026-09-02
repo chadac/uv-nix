@@ -52,6 +52,10 @@ pub use cli::{CliOutput, InfoOptions, PatchOptions};
 pub use cli::{nix_info, nix_patch};
 pub use nixgen::{GenOptions, nix_gen};
 
+// Re-export venv checking functions
+pub use is_venv_patched;
+pub use warn_if_unpatched_venv;
+
 /// Create a `nix` command with the required experimental features enabled.
 ///
 /// All `nix` subcommands (build, eval, etc.) need `nix-command`.
@@ -629,6 +633,87 @@ pub fn post_python_install_patch(python_dir: &Path) {
     status("Patched", &format!("{python_name}"));
 }
 
+/// Check if a virtual environment has been patched by uv-nix.
+///
+/// Returns `true` if the venv's `pyvenv.cfg` contains uv-nix markers
+/// (uv-nix-nixpkgs-source and uv-nix-nixpkgs-rev).
+pub fn is_venv_patched(venv: &Path) -> bool {
+    let cfg_path = venv.join("pyvenv.cfg");
+    let content = match fs::read_to_string(&cfg_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    content.contains("uv-nix-nixpkgs-source") || content.contains("uv-nix-nixpkgs-rev")
+}
+
+/// Check if we've already warned about an unpatched venv.
+///
+/// Returns `true` if the venv's `pyvenv.cfg` contains the `uv-nix-warned` marker.
+fn has_warned_about_venv(venv: &Path) -> bool {
+    let cfg_path = venv.join("pyvenv.cfg");
+    let content = match fs::read_to_string(&cfg_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    content.contains("uv-nix-warned = true")
+}
+
+/// Mark that we've warned about an unpatched venv.
+///
+/// Appends `uv-nix-warned = true` to the venv's `pyvenv.cfg`.
+fn mark_venv_warned(venv: &Path) {
+    let cfg_path = venv.join("pyvenv.cfg");
+    let content = match fs::read_to_string(&cfg_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    // Append the marker
+    let mut output = content;
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str("uv-nix-warned = true\n");
+
+    let _ = fs::write(&cfg_path, output);
+}
+
+/// Warn if the venv is unpatched and we haven't warned yet.
+///
+/// This should be called early in uv commands that use a venv.
+/// Shows a one-time warning suggesting to run `uv nix patch`.
+pub fn warn_if_unpatched_venv(venv: &Path) {
+    // Skip if we're not in a Nix environment
+    if std::env::var("NIX_STORE").is_err() && !PathBuf::from("/nix/store").exists() {
+        return;
+    }
+
+    // Skip if venv doesn't exist or isn't a directory
+    if !venv.is_dir() {
+        return;
+    }
+
+    // Skip if already patched
+    if is_venv_patched(venv) {
+        return;
+    }
+
+    // Skip if we've already warned
+    if has_warned_about_venv(venv) {
+        return;
+    }
+
+    // Show the warning
+    status_warn("This virtual environment has not been patched for Nix compatibility.");
+    eprintln!("     {}", "Run `uv nix patch` to patch native binaries and avoid runtime errors.");
+    eprintln!("     {}", "This warning will only be shown once.");
+
+    // Mark that we've warned
+    mark_venv_warned(venv);
+}
+
 /// Handler for `uv nix patch-env` — manually patch a virtual environment.
 pub fn patch_env(
     path: &Path,
@@ -654,4 +739,93 @@ pub fn patch_python(
     ctypes_hook::install_hook_for_python(path, &config.rpath);
 
     Ok(())
+}
+
+/// Check if a virtual environment has been patched by uv-nix.
+///
+/// Returns `true` if the venv at the given path has nixpkgs metadata in its
+/// `pyvenv.cfg`, indicating it was patched by `uv nix patch` or automatically
+/// during `uv pip install`.
+pub fn is_venv_patched(venv_path: &Path) -> bool {
+    let cfg_path = venv_path.join("pyvenv.cfg");
+    if !cfg_path.exists() {
+        return false;
+    }
+
+    let content = match fs::read_to_string(&cfg_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // Check for uv-nix markers that are written during patching
+    content.lines().any(|line| {
+        line.starts_with("uv-nix-nixpkgs-source")
+            || line.starts_with("uv-nix-nixpkgs-rev")
+    })
+}
+
+/// Check if a directory contains a virtual environment.
+///
+/// Returns the venv path if found, otherwise None.
+pub fn find_venv_in_dir(dir: &Path) -> Option<PathBuf> {
+    // Check common venv locations
+    for venv_name in [".venv", "venv", ".env"] {
+        let venv_path = dir.join(venv_name);
+        if venv_path.join("pyvenv.cfg").exists() {
+            return Some(venv_path);
+        }
+    }
+    None
+}
+
+/// Check if we're currently in or using an unpatched venv and warn the user.
+///
+/// This function:
+/// 1. Looks for a venv in the current directory or `VIRTUAL_ENV`
+/// 2. Checks if it's been patched with uv-nix
+/// 3. If unpatched, shows a warning message (once per venv)
+/// 4. Creates a marker file so the warning only appears once
+///
+/// Returns `true` if a warning was shown, `false` otherwise.
+pub fn check_and_warn_unpatched_venv() -> bool {
+    // First check VIRTUAL_ENV (if we're in an activated venv)
+    let venv_path = if let Ok(venv) = std::env::var("VIRTUAL_ENV") {
+        Some(PathBuf::from(venv))
+    } else {
+        // Otherwise look for a venv in the current directory
+        std::env::current_dir()
+            .ok()
+            .and_then(|dir| find_venv_in_dir(&dir))
+    };
+
+    let venv_path = match venv_path {
+        Some(path) if path.exists() => path,
+        _ => return false,
+    };
+
+    // Check if already patched
+    if is_venv_patched(&venv_path) {
+        return false;
+    }
+
+    // Check if we've already warned about this venv (one-time warning)
+    let marker_file = venv_path.join(".uv-nix-warning-shown");
+    if marker_file.exists() {
+        return false;
+    }
+
+    // Show the warning
+    status_warn(&format!(
+        "Virtual environment at {} is not patched for Nix compatibility.",
+        venv_path.display()
+    ));
+    eprintln!("     Run `uv nix patch` to patch native binaries for NixOS.");
+    eprintln!("     This warning will only appear once per venv.");
+
+    // Create marker file so we don't warn again
+    if let Err(e) = fs::write(&marker_file, "") {
+        debug!("Failed to create warning marker: {e}");
+    }
+
+    true
 }

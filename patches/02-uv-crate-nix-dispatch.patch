@@ -14,7 +14,17 @@ diff --git a/crates/uv/src/commands/pip/operations.rs b/crates/uv/src/commands/p
 index 2db72ec..71bec4a 100644
 --- a/crates/uv/src/commands/pip/operations.rs
 +++ b/crates/uv/src/commands/pip/operations.rs
-@@ -1129,6 +1129,17 @@ async fn execute_plan(
+@@ -1120,6 +1120,9 @@ async fn execute_plan(
+     // Install packages.
+     if !installs.is_empty() {
+         let start = std::time::Instant::now();
++
++        // Warn if the venv is unpatched (one-time warning).
++        uv_nix::warn_if_unpatched_venv(venv.root());
+ 
+         installer
+             // We're in a Python virtual environment, so we can assume that the Python
+@@ -1129,6 +1132,17 @@ async fn execute_plan(
              // task.
              .install_blocking(installs)?;
  
