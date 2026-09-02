@@ -633,20 +633,6 @@ pub fn post_python_install_patch(python_dir: &Path) {
     status("Patched", &format!("{python_name}"));
 }
 
-/// Check if a virtual environment has been patched by uv-nix.
-///
-/// Returns `true` if the venv's `pyvenv.cfg` contains uv-nix markers
-/// (uv-nix-nixpkgs-source and uv-nix-nixpkgs-rev).
-pub fn is_venv_patched(venv: &Path) -> bool {
-    let cfg_path = venv.join("pyvenv.cfg");
-    let content = match fs::read_to_string(&cfg_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    content.contains("uv-nix-nixpkgs-source") || content.contains("uv-nix-nixpkgs-rev")
-}
-
 /// Check if we've already warned about an unpatched venv.
 ///
 /// Returns `true` if the venv's `pyvenv.cfg` contains the `uv-nix-warned` marker.
