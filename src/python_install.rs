@@ -226,10 +226,3 @@ fn get_python_version(python_bin: &Path) -> Result<semver::Version> {
         .with_context(|| format!("Failed to parse Python version: {}", version_str))
 }
 
-/// Check if a Python installation can be used (is it compatible).
-pub fn is_compatible_python(python_bin: &Path, requirement: &PythonRequirement) -> bool {
-    get_python_version(python_bin)
-        .ok()
-        .map(|v| requirement.version.matches(&v))
-        .unwrap_or(false)
-}
