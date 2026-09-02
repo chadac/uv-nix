@@ -11,18 +11,27 @@ index cfd715b..2b913f1 100644
  uv-pep440 = { workspace = true }
  uv-pep508 = { workspace = true }
 diff --git a/crates/uv/src/lib.rs b/crates/uv/src/lib.rs
-index 3201709..2e3328c 100644
+index 3201709..3dae8ed 100644
 --- a/crates/uv/src/lib.rs
 +++ b/crates/uv/src/lib.rs
-@@ -1278,6 +1278,66 @@ async fn run_with_workspace_cache(
+@@ -28,7 +28,7 @@ use uv_cache_info::Timestamp;
+ use uv_cli::SelfUpdateArgs;
+ use uv_cli::{
+     AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
+-    CacheNamespace, CacheSizeOutputFormat, Cli, Commands, PipCommand, PipNamespace, ProjectCommand,
++    CacheNamespace, NixCommand, NixNamespace, CacheSizeOutputFormat, Cli, Commands, PipCommand, PipNamespace, ProjectCommand,
+     PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace,
+     TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
+ };
+@@ -1278,6 +1278,72 @@ async fn run_with_workspace_cache(
          }) => Err(anyhow!(
              "pip's `debug` is unsupported (consider using `uvx pip debug` instead)"
          )),
 +        Commands::Nix(NixNamespace {
 +            command: NixCommand::Patch(args),
 +        }) => {
-+            let mut stdout = std::io::stdout();
-+            let mut stderr = std::io::stderr();
++            let mut stdout = String::new();
++            let mut stderr = String::new();
 +            let mut out = uv_nix::CliOutput {
 +                stdout: &mut stdout,
 +                stderr: &mut stderr,
@@ -37,13 +46,15 @@ index 3201709..2e3328c 100644
 +                },
 +            )
 +            .map_err(|e| anyhow!(e))?;
++            print!("{stdout}");
++            eprint!("{stderr}");
 +            Ok(ExitStatus::Success)
 +        }
 +        Commands::Nix(NixNamespace {
 +            command: NixCommand::Info(args),
 +        }) => {
-+            let mut stdout = std::io::stdout();
-+            let mut stderr = std::io::stderr();
++            let mut stdout = String::new();
++            let mut stderr = String::new();
 +            let mut out = uv_nix::CliOutput {
 +                stdout: &mut stdout,
 +                stderr: &mut stderr,
@@ -55,13 +66,15 @@ index 3201709..2e3328c 100644
 +                package: args.package,
 +            })
 +            .map_err(|e| anyhow!(e))?;
++            print!("{stdout}");
++            eprint!("{stderr}");
 +            Ok(ExitStatus::Success)
 +        }
 +        Commands::Nix(NixNamespace {
 +            command: NixCommand::Gen(args),
 +        }) => {
-+            let mut stdout = std::io::stdout();
-+            let mut stderr = std::io::stderr();
++            let mut stdout = String::new();
++            let mut stderr = String::new();
 +            let mut out = uv_nix::CliOutput {
 +                stdout: &mut stdout,
 +                stderr: &mut stderr,
@@ -76,6 +89,8 @@ index 3201709..2e3328c 100644
 +                },
 +            )
 +            .map_err(|e| anyhow!(e))?;
++            print!("{stdout}");
++            eprint!("{stderr}");
 +            Ok(ExitStatus::Success)
 +        }
          Commands::Cache(CacheNamespace {
