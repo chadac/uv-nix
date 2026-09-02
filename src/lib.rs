@@ -15,6 +15,7 @@ pub mod nix_config;
 pub mod nixgen;
 pub mod nixpkgs;
 pub mod patchelf;
+pub mod python_install;
 pub mod rust_overlay;
 pub mod soname;
 
@@ -594,6 +595,28 @@ fn is_musl_python(python_dir: &Path) -> bool {
     false
 }
 
+/// Check if a nixpkgs Python is available and compatible with project requirements.
+///
+/// Returns `Some(path)` if a suitable nixpkgs Python is found.
+/// This can be used to inform users about available alternatives to managed Python.
+pub fn check_nixpkgs_python_available(project_dir: &Path) -> Option<PathBuf> {
+    // Find Python requirement from project files
+    let requirement = python_install::find_python_requirement(project_dir)?;
+    
+    // Check if nixpkgs has a matching Python
+    match python_install::find_nixpkgs_python(project_dir, &requirement) {
+        Ok(Some(path)) => Some(path),
+        Ok(None) => {
+            debug!("No matching nixpkgs Python found for requirement");
+            None
+        }
+        Err(err) => {
+            debug!("Failed to check nixpkgs Python: {err}");
+            None
+        }
+    }
+}
+
 /// Called automatically after `uv python install` to patch the Python interpreter.
 ///
 /// `python_dir` is the installation directory (e.g., `cpython-3.12.13-linux-x86_64-gnu/`)
@@ -601,6 +624,9 @@ fn is_musl_python(python_dir: &Path) -> bool {
 ///
 /// Uses nix to resolve library paths and patchelf/install_name_tool, then patches
 /// ELF/Mach-O binaries in place and installs the ctypes hook.
+///
+/// When UV_NIX_PREFER_NIXPKGS_PYTHON=1 is set, checks if a compatible nixpkgs Python
+/// is available and informs the user.
 pub fn post_python_install_patch(python_dir: &Path) {
     // Skip musl-linked Python — our glibc paths would break it
     if is_musl_python(python_dir) {
@@ -609,6 +635,28 @@ pub fn post_python_install_patch(python_dir: &Path) {
             python_dir.display()
         );
         return;
+    }
+
+    // Check if there's a suitable nixpkgs Python available
+    // If UV_NIX_PREFER_NIXPKGS_PYTHON=1, inform the user
+    if std::env::var("UV_NIX_PREFER_NIXPKGS_PYTHON").is_ok_and(|v| v == "1") {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let project_dir = nix_config::find_project_root(&cwd).unwrap_or(cwd);
+        
+        if let Some(nixpkgs_python) = check_nixpkgs_python_available(&project_dir) {
+            status_warn(&format!(
+                "A compatible nixpkgs Python is available at {}",
+                nixpkgs_python.display()
+            ));
+            eprintln!(
+                "     {}",
+                "Consider using it in your dev environment instead of managed Python."
+            );
+            eprintln!(
+                "     {}",
+                "See uv-nix documentation for nix-managed Python setup."
+            );
+        }
     }
 
     // Nix is required — require() exits with error if not available
