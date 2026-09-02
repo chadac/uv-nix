@@ -381,7 +381,7 @@ fn load_dev_env_cache(cache_key: &str) -> Option<nixpkgs::ResolvedBuildEnv> {
         .join("uv-nix");
 
     let path = cache_dir.join(format!("{cache_key}.json"));
-    let content = std::fs::read_to_string(&path).ok()?;
+    let content = fs::read_to_string(&path).ok()?;
     serde_json::from_str(&content).ok()
 }
 
@@ -393,10 +393,10 @@ fn save_dev_env_cache(cache_key: &str, env: &nixpkgs::ResolvedBuildEnv) -> anyho
         .ok_or_else(|| anyhow::anyhow!("Cannot determine cache directory"))?
         .join("uv-nix");
 
-    std::fs::create_dir_all(&cache_dir)?;
+    fs::create_dir_all(&cache_dir)?;
     let path = cache_dir.join(format!("{cache_key}.json"));
     let content = serde_json::to_string_pretty(env)?;
-    std::fs::write(&path, content)?;
+    fs::write(&path, content)?;
     debug!("Cached dev env at {}", path.display());
     Ok(())
 }

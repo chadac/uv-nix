@@ -40,7 +40,7 @@ pub fn detect_msrv(source_dir: &Path) -> Option<Version> {
     }
 
     // Some packages nest their Rust code one level deep
-    if let Ok(entries) = std::fs::read_dir(source_dir) {
+    if let Ok(entries) = fs::read_dir(source_dir) {
         for entry in entries.flatten() {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let candidate = entry.path().join("Cargo.toml");
@@ -56,7 +56,7 @@ pub fn detect_msrv(source_dir: &Path) -> Option<Version> {
 
 /// Parse `rust-version` from a Cargo.toml file.
 fn parse_msrv_from_cargo_toml(path: &Path) -> Option<Version> {
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = fs::read_to_string(path).ok()?;
     let doc: toml::Value = toml::from_str(&content).ok()?;
     let rust_version_str = doc.get("package")?.get("rust-version")?.as_str()?;
 
@@ -261,19 +261,19 @@ in pkgs.rust-bin.stable."{rust_version}".default"#
 /// Load locked inputs from `.venv/share/uv-nix/locked.json` (searching upward for .venv).
 fn load_locked_inputs(project_dir: &Path) -> Option<LockedInputs> {
     let lock_path = project_dir.join(".venv/share/uv-nix/locked.json");
-    let content = std::fs::read_to_string(&lock_path).ok()?;
+    let content = fs::read_to_string(&lock_path).ok()?;
     serde_json::from_str(&content).ok()
 }
 
 /// Save locked inputs to `.venv/share/uv-nix/locked.json`.
 fn save_locked_inputs(project_dir: &Path, inputs: &LockedInputs) {
     let dir = project_dir.join(".venv/share/uv-nix");
-    if std::fs::create_dir_all(&dir).is_err() {
+    if fs::create_dir_all(&dir).is_err() {
         return;
     }
     let path = dir.join("locked.json");
     let content = serde_json::to_string_pretty(inputs).unwrap_or_default();
-    let _ = std::fs::write(&path, content);
+    let _ = fs::write(&path, content);
     debug!("Saved locked inputs to {}", path.display());
 }
 
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn test_detect_msrv_from_dir() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
+        fs::write(
             dir.path().join("Cargo.toml"),
             r#"[package]
 name = "test"
@@ -339,8 +339,8 @@ rust-version = "1.95"
     fn test_detect_msrv_nested() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("rust-src");
-        std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(
             sub.join("Cargo.toml"),
             r#"[package]
 name = "nested"
@@ -363,7 +363,7 @@ rust-version = "1.82"
     #[test]
     fn test_detect_msrv_no_rust_version_field() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
+        fs::write(
             dir.path().join("Cargo.toml"),
             r#"[package]
 name = "test"
@@ -379,7 +379,7 @@ version = "0.1.0"
     fn test_locked_inputs_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let venv = dir.path().join(".venv/share/uv-nix");
-        std::fs::create_dir_all(&venv).unwrap();
+        fs::create_dir_all(&venv).unwrap();
 
         let inputs = LockedInputs {
             rust_overlay: Some(LockedRustOverlay {
