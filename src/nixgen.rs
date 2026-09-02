@@ -6,6 +6,7 @@
 //! Two output modes:
 //! - Full `package.nix`: complete uv2nix derivation with workspace, overlays, and native lib overrides
 //! - Overlay-only (`--overlay-only`): just the override overlay for native library dependencies
+use fs_err as fs;
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;

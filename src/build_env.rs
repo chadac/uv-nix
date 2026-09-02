@@ -1,3 +1,4 @@
+use fs_err as fs;
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;

@@ -1,3 +1,4 @@
+use fs_err as fs;
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -8,6 +8,7 @@
 //!
 //! The pre-compiled soname map lives at `data/soname-map.json` and is
 //! regenerated via `just generate-soname-map`.
+use fs_err as fs;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
