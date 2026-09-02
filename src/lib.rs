@@ -748,4 +748,3 @@ pub fn is_venv_patched(venv_path: &Path) -> bool {
         })
         .unwrap_or(false)
 }
-}
