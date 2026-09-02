@@ -11,7 +11,7 @@ index cfd715b..2b913f1 100644
  uv-pep440 = { workspace = true }
  uv-pep508 = { workspace = true }
 diff --git a/crates/uv/src/lib.rs b/crates/uv/src/lib.rs
-index 3201709..3dae8ed 100644
+index 3201709..c45a075 100644
 --- a/crates/uv/src/lib.rs
 +++ b/crates/uv/src/lib.rs
 @@ -28,7 +28,7 @@ use uv_cache_info::Timestamp;
@@ -23,7 +23,7 @@ index 3201709..3dae8ed 100644
      PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace,
      TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
  };
-@@ -1278,6 +1278,72 @@ async fn run_with_workspace_cache(
+@@ -1278,6 +1278,75 @@ async fn run_with_workspace_cache(
          }) => Err(anyhow!(
              "pip's `debug` is unsupported (consider using `uvx pip debug` instead)"
          )),
@@ -39,7 +39,10 @@ index 3201709..3dae8ed 100644
 +            uv_nix::nix_patch(
 +                &mut out,
 +                uv_nix::PatchOptions {
-+                    path: args.venv,
++                    path: args.path,
++                    only_python: args.only_python,
++                    only_packages: args.only_packages,
++                    packages: args.packages,
 +                    patchelf: args.patchelf,
 +                    interpreter: args.interpreter,
 +                    rpath: args.rpath,
