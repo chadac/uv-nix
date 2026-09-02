@@ -1,3 +1,15 @@
+diff --git a/crates/uv/Cargo.toml b/crates/uv/Cargo.toml
+index cfd715b..2b913f1 100644
+--- a/crates/uv/Cargo.toml
++++ b/crates/uv/Cargo.toml
+@@ -40,6 +40,7 @@ uv-git-types = { workspace = true }
+ uv-install-wheel = { workspace = true, default-features = false }
+ uv-installer = { workspace = true }
+ uv-logging = { workspace = true }
++uv-nix = { workspace = true }
+ uv-normalize = { workspace = true }
+ uv-pep440 = { workspace = true }
+ uv-pep508 = { workspace = true }
 diff --git a/crates/uv/src/lib.rs b/crates/uv/src/lib.rs
 index 3201709..2e3328c 100644
 --- a/crates/uv/src/lib.rs
