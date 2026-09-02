@@ -663,17 +663,17 @@ fn mark_venv_warned(venv: &Path) {
 /// Shows a one-time warning suggesting to run `uv nix patch`.
 pub fn warn_if_unpatched_venv(venv: &Path) {
     use std::io::IsTerminal;
-    
+
     // Skip if warning is suppressed (for tests)
     if std::env::var("UV_NIX_SUPPRESS_WARNINGS").is_ok() {
         return;
     }
-    
+
     // Skip if not in an interactive terminal (avoid polluting test output)
     if !std::io::stderr().is_terminal() {
         return;
     }
-    
+
     // Skip if we're not in a Nix environment
     if std::env::var("NIX_STORE").is_err() && !Path::new("/nix/store").exists() {
         return;
@@ -737,12 +737,11 @@ pub fn patch_python(
 /// during `uv pip install`.
 pub fn is_venv_patched(venv_path: &Path) -> bool {
     let cfg_path = venv_path.join("pyvenv.cfg");
-    
+
     fs::read_to_string(&cfg_path)
         .map(|content| {
             content.lines().any(|line| {
-                line.starts_with("uv-nix-nixpkgs-source")
-                    || line.starts_with("uv-nix-nixpkgs-rev")
+                line.starts_with("uv-nix-nixpkgs-source") || line.starts_with("uv-nix-nixpkgs-rev")
             })
         })
         .unwrap_or(false)
