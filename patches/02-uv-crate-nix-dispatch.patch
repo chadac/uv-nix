@@ -10,20 +10,57 @@ index cfd715b..2b913f1 100644
  uv-normalize = { workspace = true }
  uv-pep440 = { workspace = true }
  uv-pep508 = { workspace = true }
+diff --git a/crates/uv/src/commands/pip/operations.rs b/crates/uv/src/commands/pip/operations.rs
+index aefa0d4..acec528 100644
+--- a/crates/uv/src/commands/pip/operations.rs
++++ b/crates/uv/src/commands/pip/operations.rs
+@@ -1116,6 +1116,10 @@ async fn execute_plan(
+     let mut installs = wheels.into_iter().chain(cached).collect::<Vec<_>>();
+     if !installs.is_empty() {
+         let start = std::time::Instant::now();
++
++        // Warn if the venv is unpatched (one-time warning).
++        uv_nix::warn_if_unpatched_venv(venv.root());
++
+         installs = uv_installer::Installer::new(venv, preview)
+             .with_link_mode(link_mode)
+             .with_cache(cache)
+@@ -1128,6 +1132,17 @@ async fn execute_plan(
+             // task.
+             .install_blocking(installs)?;
+ 
++        // Patch native binaries for Nix compatibility.
++        // Build dist-info prefixes (e.g. "numpy-2.4.6") so uv-nix can find
++        // exactly which files were just installed via their RECORD files.
++        let nix_dist_prefixes: Vec<String> = installs
++            .iter()
++            .map(|d| format!("{}-{}", d.filename().name.as_dist_info_name(), d.filename().version))
++            .collect();
++        for site_packages_dir in venv.site_packages() {
++            uv_nix::post_install_patch(&site_packages_dir, &nix_dist_prefixes)?;
++        }
++
+         logger.on_install(installs.len(), start, printer, DryRun::Disabled)?;
+     }
+ 
+diff --git a/crates/uv/src/commands/python/install.rs b/crates/uv/src/commands/python/install.rs
+index 4713b52..241cd25 100644
+--- a/crates/uv/src/commands/python/install.rs
++++ b/crates/uv/src/commands/python/install.rs
+@@ -683,6 +683,8 @@ async fn perform_install(
+             e.warn_user(installation);
+         }
+ 
++        uv_nix::post_python_install_patch(installation.path());
++
+         let upgradeable = (default || is_default_install)
+             || requested_minor_versions.contains(&installation.key().version().python_version());
+ 
 diff --git a/crates/uv/src/lib.rs b/crates/uv/src/lib.rs
-index 3201709..09a1932 100644
+index 3201709..ded3cc2 100644
 --- a/crates/uv/src/lib.rs
 +++ b/crates/uv/src/lib.rs
-@@ -28,7 +28,7 @@ use uv_cache_info::Timestamp;
- use uv_cli::SelfUpdateArgs;
- use uv_cli::{
-     AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
--    CacheNamespace, CacheSizeOutputFormat, Cli, Commands, PipCommand, PipNamespace, ProjectCommand,
-+    CacheNamespace, CacheSizeOutputFormat, Cli, Commands, NixCommand, NixNamespace, PipCommand, PipNamespace, ProjectCommand,
-     PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace,
-     TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
- };
-@@ -1278,6 +1278,60 @@ async fn run_with_workspace_cache(
+@@ -1278,6 +1278,54 @@ async fn run_with_workspace_cache(
          }) => Err(anyhow!(
              "pip's `debug` is unsupported (consider using `uvx pip debug` instead)"
          )),
@@ -36,15 +73,16 @@ index 3201709..09a1932 100644
 +                stdout: &mut stdout,
 +                stderr: &mut stderr,
 +            };
-+            uv_nix::nix_patch(&mut out, uv_nix::PatchOptions {
-+                path: args.path,
-+                only_python: args.only_python,
-+                only_packages: args.only_packages,
-+                packages: args.packages,
-+                patchelf: args.patchelf,
-+                interpreter: args.interpreter,
-+                rpath: args.rpath,
-+            })?;
++            uv_nix::nix_patch(
++                &mut out,
++                uv_nix::PatchOptions {
++                    path: args.venv,
++                    patchelf: args.patchelf,
++                    interpreter: args.interpreter,
++                    rpath: args.rpath,
++                },
++            )
++            .map_err(|e| anyhow!(e))?;
 +            Ok(ExitStatus::Success)
 +        }
 +        Commands::Nix(NixNamespace {
@@ -61,7 +99,8 @@ index 3201709..09a1932 100644
 +                verbose: args.show_details,
 +                json: args.json,
 +                package: args.package,
-+            })?;
++            })
++            .map_err(|e| anyhow!(e))?;
 +            Ok(ExitStatus::Success)
 +        }
 +        Commands::Nix(NixNamespace {
@@ -73,12 +112,16 @@ index 3201709..09a1932 100644
 +                stdout: &mut stdout,
 +                stderr: &mut stderr,
 +            };
-+            uv_nix::nix_gen(&mut out, uv_nix::GenOptions {
-+                venv: args.venv,
-+                output: args.output,
-+                overlay_only: args.overlay_only,
-+                prefer_wheels: !args.no_prefer_wheels,
-+            })?;
++            uv_nix::nix_gen(
++                &mut out,
++                uv_nix::GenOptions {
++                    venv: args.venv,
++                    output: args.output,
++                    overlay_only: args.overlay_only,
++                    prefer_wheels: !args.no_prefer_wheels,
++                },
++            )
++            .map_err(|e| anyhow!(e))?;
 +            Ok(ExitStatus::Success)
 +        }
          Commands::Cache(CacheNamespace {
