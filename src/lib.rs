@@ -668,7 +668,7 @@ fn mark_venv_warned(venv: &Path) {
 /// Shows a one-time warning suggesting to run `uv nix patch`.
 pub fn warn_if_unpatched_venv(venv: &Path) {
     // Skip if we're not in a Nix environment
-    if std::env::var("NIX_STORE").is_err() && !PathBuf::from("/nix/store").exists() {
+    if std::env::var("NIX_STORE").is_err() && !Path::new("/nix/store").exists() {
         return;
     }
 
@@ -689,8 +689,8 @@ pub fn warn_if_unpatched_venv(venv: &Path) {
 
     // Show the warning
     status_warn("This virtual environment has not been patched for Nix compatibility.");
-    eprintln!("     {}", "Run `uv nix patch` to patch native binaries and avoid runtime errors.");
-    eprintln!("     {}", "This warning will only be shown once.");
+    eprintln!("     Run `uv nix patch` to patch native binaries and avoid runtime errors.");
+    eprintln!("     This warning will only be shown once.");
 
     // Mark that we've warned
     mark_venv_warned(venv);
