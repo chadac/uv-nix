@@ -1,3 +1,4 @@
+use fs_err as fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,7 @@ fn cache_path(project_dir: &Path) -> PathBuf {
 pub fn lookup(project_dir: &Path, nixpkgs_key: &str, attrs: &[String]) -> Option<String> {
     let key = cache_key(nixpkgs_key, attrs);
     let path = cache_path(project_dir);
-    let content = std::fs::read_to_string(&path).ok()?;
+    let content = fs::read_to_string(&path).ok()?;
     let entry: CacheEntry = serde_json::from_str(&content).ok()?;
 
     if entry.key == key {
@@ -61,7 +62,7 @@ pub fn store(
     let path = cache_path(project_dir);
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
     }
 
     let entry = CacheEntry {
@@ -70,7 +71,7 @@ pub fn store(
     };
 
     let content = serde_json::to_string_pretty(&entry)?;
-    std::fs::write(&path, content)?;
+    fs::write(&path, content)?;
     debug!("Cached resolved library paths at {}", path.display());
     Ok(())
 }

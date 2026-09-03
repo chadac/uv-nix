@@ -1,4 +1,4 @@
-use std::fs;
+use fs_err as fs;
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};

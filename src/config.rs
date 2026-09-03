@@ -1,3 +1,4 @@
+use fs_err as fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -314,7 +315,7 @@ pub fn find_config(start: &Path) -> Option<(UvNixConfig, PathBuf)> {
 
 /// Try to parse `[tool.uv-nix]` from a pyproject.toml file.
 fn try_parse_config(path: &Path) -> Option<UvNixConfig> {
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = fs::read_to_string(path).ok()?;
     let pyproject: PyprojectToml = toml::from_str(&content).ok()?;
     let config = pyproject.tool?.uv_nix?;
 

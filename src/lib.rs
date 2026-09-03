@@ -1,10 +1,9 @@
-use std::fs;
+use fs_err as fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use tracing::debug;
-
-use std::process::Command;
 
 pub mod build_env;
 pub mod cache;
@@ -611,8 +610,11 @@ pub fn post_python_install_patch(python_dir: &Path) {
         return;
     }
 
-    // Nix is required — require() exits with error if not available
-    let _nix = nix_config::require();
+    // Skip if Nix is not available (non-NixOS system)
+    if nix_config::get().is_none() {
+        debug!("Skipping patching for non-Nix system");
+        return;
+    }
 
     let config = patchelf::PatchConfig::from_env();
 
@@ -627,6 +629,81 @@ pub fn post_python_install_patch(python_dir: &Path) {
     ctypes_hook::install_hook_for_python(python_dir, &config.rpath);
 
     status("Patched", &format!("{python_name}"));
+}
+
+/// Check if we've already warned about an unpatched venv.
+///
+/// Returns `true` if the venv's `pyvenv.cfg` contains the `uv-nix-warned` marker.
+fn has_warned_about_venv(venv: &Path) -> bool {
+    let cfg_path = venv.join("pyvenv.cfg");
+    fs::read_to_string(&cfg_path)
+        .map(|content| content.contains("uv-nix-warned = true"))
+        .unwrap_or(false)
+}
+
+/// Mark that we've warned about an unpatched venv.
+///
+/// Appends `uv-nix-warned = true` to the venv's `pyvenv.cfg`.
+fn mark_venv_warned(venv: &Path) {
+    let cfg_path = venv.join("pyvenv.cfg");
+    let Ok(content) = fs::read_to_string(&cfg_path) else {
+        return;
+    };
+
+    // Append the marker
+    let mut output = content;
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str("uv-nix-warned = true\n");
+
+    fs::write(&cfg_path, output).ok();
+}
+
+/// Warn if the venv is unpatched and we haven't warned yet.
+///
+/// This should be called early in uv commands that use a venv.
+/// Shows a one-time warning suggesting to run `uv nix patch`.
+pub fn warn_if_unpatched_venv(venv: &Path) {
+    use std::io::IsTerminal;
+
+    // Skip if warning is suppressed (for tests)
+    if std::env::var("UV_NIX_SUPPRESS_WARNINGS").is_ok() {
+        return;
+    }
+
+    // Skip if not in an interactive terminal (avoid polluting test output)
+    if !std::io::stderr().is_terminal() {
+        return;
+    }
+
+    // Skip if we're not in a Nix environment
+    if std::env::var("NIX_STORE").is_err() && !Path::new("/nix/store").exists() {
+        return;
+    }
+
+    // Skip if venv doesn't exist or isn't a directory
+    if !venv.is_dir() {
+        return;
+    }
+
+    // Skip if already patched
+    if is_venv_patched(venv) {
+        return;
+    }
+
+    // Skip if we've already warned
+    if has_warned_about_venv(venv) {
+        return;
+    }
+
+    // Show the warning
+    status_warn("This virtual environment has not been patched for Nix compatibility.");
+    eprintln!("     Run `uv nix patch` to patch native binaries and avoid runtime errors.");
+    eprintln!("     This warning will only be shown once.");
+
+    // Mark that we've warned
+    mark_venv_warned(venv);
 }
 
 /// Handler for `uv nix patch-env` — manually patch a virtual environment.
@@ -654,4 +731,21 @@ pub fn patch_python(
     ctypes_hook::install_hook_for_python(path, &config.rpath);
 
     Ok(())
+}
+
+/// Check if a virtual environment has been patched by uv-nix.
+///
+/// Returns `true` if the venv at the given path has nixpkgs metadata in its
+/// `pyvenv.cfg`, indicating it was patched by `uv nix patch` or automatically
+/// during `uv pip install`.
+pub fn is_venv_patched(venv_path: &Path) -> bool {
+    let cfg_path = venv_path.join("pyvenv.cfg");
+
+    fs::read_to_string(&cfg_path)
+        .map(|content| {
+            content.lines().any(|line| {
+                line.starts_with("uv-nix-nixpkgs-source") || line.starts_with("uv-nix-nixpkgs-rev")
+            })
+        })
+        .unwrap_or(false)
 }

@@ -6,6 +6,7 @@
 //! Two output modes:
 //! - Full `package.nix`: complete uv2nix derivation with workspace, overlays, and native lib overrides
 //! - Overlay-only (`--overlay-only`): just the override overlay for native library dependencies
+use fs_err as fs;
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
@@ -95,7 +96,7 @@ fn curated_libs(entry: &PackageBuildEntry) -> impl Iterator<Item = &String> {
 fn installed_package_names(venv: &Path) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     let lib_dir = venv.join("lib");
-    let Ok(entries) = std::fs::read_dir(&lib_dir) else {
+    let Ok(entries) = fs::read_dir(&lib_dir) else {
         return names;
     };
     for entry in entries.flatten() {
@@ -105,7 +106,7 @@ fn installed_package_names(venv: &Path) -> BTreeSet<String> {
             continue;
         }
         let sp = entry.path().join("site-packages");
-        let Ok(sp_entries) = std::fs::read_dir(&sp) else {
+        let Ok(sp_entries) = fs::read_dir(&sp) else {
             continue;
         };
         for sp_entry in sp_entries.flatten() {
@@ -418,7 +419,7 @@ pub fn nix_gen<O: Write, E: Write>(
 
     // Write output
     if let Some(ref output_path) = opts.output {
-        std::fs::write(output_path, &nix_expr)?;
+        fs::write(output_path, &nix_expr)?;
         let _ = writeln!(
             out.stderr,
             "{} {}",
@@ -636,7 +637,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let venv = dir.path().join(".venv");
         let sp = venv.join("lib/python3.13/site-packages");
-        std::fs::create_dir_all(sp.join("pysodium-0.7.18.dist-info")).unwrap();
+        fs::create_dir_all(sp.join("pysodium-0.7.18.dist-info")).unwrap();
 
         let manifest = make_manifest(vec![(
             "numpy",
@@ -847,8 +848,8 @@ mod tests {
     fn nix_gen_empty_manifest_errors() {
         let dir = tempfile::tempdir().unwrap();
         let venv = dir.path().join(".venv");
-        std::fs::create_dir_all(venv.join("share/uv-nix")).unwrap();
-        std::fs::write(
+        fs::create_dir_all(venv.join("share/uv-nix")).unwrap();
+        fs::write(
             venv.join("share/uv-nix/patches.json"),
             r#"{"nixpkgs_rev":"abc","packages":{}}"#,
         )
