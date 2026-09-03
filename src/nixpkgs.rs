@@ -1,3 +1,4 @@
+use fs_err as fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -218,7 +219,7 @@ fn auto_resolve_nixpkgs(project_dir: &Path) -> Option<String> {
 }
 "#;
 
-    if let Err(err) = std::fs::write(&flake_path, flake_content) {
+    if let Err(err) = fs::write(&flake_path, flake_content) {
         crate::status_warn(&format!("Failed to write flake.nix: {err}"));
         return resolve_latest_nixpkgs_rev();
     }
@@ -274,7 +275,7 @@ fn git_stage(project_dir: &Path, file: &str) {
 
 /// Remove a generated flake.nix and unstage it from git.
 fn cleanup_generated_flake(project_dir: &Path, flake_path: &Path) {
-    let _ = std::fs::remove_file(flake_path);
+    let _ = fs::remove_file(flake_path);
     let _ = Command::new("git")
         .arg("-C")
         .arg(project_dir)
@@ -314,7 +315,7 @@ fn resolve_latest_nixpkgs_rev() -> Option<String> {
 /// Uses toml_edit to preserve existing formatting, comments, and ordering.
 #[cfg(test)]
 fn write_nixpkgs_pin(pyproject_path: &Path, rev: &str) -> anyhow::Result<()> {
-    let content = std::fs::read_to_string(pyproject_path)?;
+    let content = fs::read_to_string(pyproject_path)?;
     let mut doc: toml_edit::DocumentMut = content.parse()?;
 
     let pin_value = format!("github:NixOS/nixpkgs/{rev}");
@@ -342,7 +343,7 @@ fn write_nixpkgs_pin(pyproject_path: &Path, rev: &str) -> anyhow::Result<()> {
 
     uv_nix_table.insert("nixpkgs", toml_edit::value(&pin_value));
 
-    std::fs::write(pyproject_path, doc.to_string())?;
+    fs::write(pyproject_path, doc.to_string())?;
     Ok(())
 }
 
@@ -448,7 +449,7 @@ pub fn resolve_build_paths(
     }
 
     let result_path = String::from_utf8(output.stdout)?.trim().to_string();
-    let json_str = std::fs::read_to_string(&result_path)?;
+    let json_str = fs::read_to_string(&result_path)?;
 
     #[derive(Deserialize)]
     struct NixBuildPaths {
@@ -683,7 +684,7 @@ struct FlakeLocked {
 
 /// Parse flake.lock to find the nixpkgs input's pinned rev.
 fn parse_flake_lock(lock_path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(lock_path).ok()?;
+    let content = fs::read_to_string(lock_path).ok()?;
     let lock: FlakeLock = serde_json::from_str(&content).ok()?;
 
     // Find the root node and look for a "nixpkgs" input
@@ -728,7 +729,7 @@ fn resolve_input_key(
 ///    to find the underlying `NixOS/nixpkgs` rev
 /// 3. Any other node pointing to `NixOS/nixpkgs` — use it as fallback
 fn parse_devenv_lock(lock_path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(lock_path).ok()?;
+    let content = fs::read_to_string(lock_path).ok()?;
     let lock: FlakeLock = serde_json::from_str(&content).ok()?;
 
     // First: try parsing it as a normal flake.lock (handles direct NixOS/nixpkgs)
@@ -798,7 +799,7 @@ struct FloxPackageEntry {
 /// Extracts the `rev` field from the first package entry that has one.
 /// All packages in a flox lock typically share the same nixpkgs rev.
 fn parse_flox_lock(lock_path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(lock_path).ok()?;
+    let content = fs::read_to_string(lock_path).ok()?;
     let lock: FloxManifestLock = serde_json::from_str(&content).ok()?;
 
     let packages = lock.packages?;
