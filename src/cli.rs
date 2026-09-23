@@ -7,6 +7,7 @@
 //! - Status/progress messages → stderr (dimmed)
 //! - Data output (info, JSON) → stdout
 //! - Completion messages → stderr (with colors)
+use fs_err as fs;
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -90,7 +91,7 @@ pub struct NixpkgsInfo {
 /// updating existing entries if present.
 fn save_venv_nixpkgs(venv: &Path, info: &NixpkgsInfo) {
     let cfg_path = venv.join("pyvenv.cfg");
-    let content = match std::fs::read_to_string(&cfg_path) {
+    let content = match fs::read_to_string(&cfg_path) {
         Ok(c) => c,
         Err(err) => {
             tracing::debug!("Failed to read pyvenv.cfg: {err}");
@@ -114,7 +115,7 @@ fn save_venv_nixpkgs(venv: &Path, info: &NixpkgsInfo) {
     output.push_str(&format!("\nuv-nix-nixpkgs-rev = {}", info.value));
     output.push('\n');
 
-    if let Err(err) = std::fs::write(&cfg_path, output) {
+    if let Err(err) = fs::write(&cfg_path, output) {
         tracing::debug!("Failed to write pyvenv.cfg: {err}");
     }
 }
@@ -122,7 +123,7 @@ fn save_venv_nixpkgs(venv: &Path, info: &NixpkgsInfo) {
 /// Read nixpkgs metadata from pyvenv.cfg if available.
 fn load_venv_nixpkgs(venv: &Path) -> Option<NixpkgsInfo> {
     let cfg_path = venv.join("pyvenv.cfg");
-    let content = std::fs::read_to_string(cfg_path).ok()?;
+    let content = fs::read_to_string(cfg_path).ok()?;
 
     let mut source = None;
     let mut value = None;
@@ -448,7 +449,7 @@ fn find_site_packages(venv: &Path) -> anyhow::Result<PathBuf> {
     }
 
     // Look for lib/python3.X/site-packages
-    for entry in std::fs::read_dir(&lib_dir)? {
+    for entry in fs::read_dir(&lib_dir)? {
         let entry = entry?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
@@ -471,7 +472,7 @@ fn find_packages_by_name(site_packages: &Path, names: &[String]) -> Vec<(String,
         .map(|n| n.to_lowercase().replace('-', "_"))
         .collect();
 
-    if let Ok(entries) = std::fs::read_dir(site_packages) {
+    if let Ok(entries) = fs::read_dir(site_packages) {
         for entry in entries.flatten() {
             let entry_name = entry.file_name();
             let entry_str = entry_name.to_string_lossy();
@@ -497,7 +498,7 @@ fn find_packages_by_name(site_packages: &Path, names: &[String]) -> Vec<(String,
 fn find_all_native_packages(site_packages: &Path, is_darwin: bool) -> Vec<(String, PathBuf)> {
     let mut result = Vec::new();
 
-    if let Ok(entries) = std::fs::read_dir(site_packages) {
+    if let Ok(entries) = fs::read_dir(site_packages) {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
@@ -520,7 +521,7 @@ fn find_all_native_packages(site_packages: &Path, is_darwin: bool) -> Vec<(Strin
 /// Looks for `<normalized_name>-*.dist-info/METADATA` and extracts the version.
 fn find_dist_info_version(site_packages: &Path, pkg_name: &str) -> Option<String> {
     let normalized = pkg_name.to_lowercase().replace('-', "_");
-    if let Ok(entries) = std::fs::read_dir(site_packages) {
+    if let Ok(entries) = fs::read_dir(site_packages) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
@@ -555,7 +556,7 @@ fn collect_venv_info(venv: &Path, verbose: bool) -> anyhow::Result<VenvNixInfo> 
     let mut packages = Vec::new();
     let mut total_binaries = 0;
 
-    for entry in std::fs::read_dir(&site_packages)?.flatten() {
+    for entry in fs::read_dir(&site_packages)?.flatten() {
         let path = entry.path();
         if !path.is_dir() {
             continue;
