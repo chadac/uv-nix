@@ -179,14 +179,26 @@ fi
 # propagatedBuildInputs puts runtime libs in the closure, but Python's
 # ctypes.util.find_library needs a search path to discover them.
 
-# A libc/loader store dir must never enter this path: it is inherited by every
-# child process, and a Nix libc.so.6 under a mismatched ld.so aborts the process
-# ("undefined symbol: __pointer_chk_guard"). That kills the `ld` that
+# Does a glob match at least one existing file? `compgen -G` would be the
+# obvious test, but nixpkgs' bashNonInteractive -- the bash `nix develop`
+# provides -- is built without progcomp and has no `compgen`. Why: PR #78.
+glob_matches() {
+    local f
+    # shellcheck disable=SC2231  # $1 must stay unquoted to expand as a glob
+    for f in $1; do
+        [ -e "$f" ] && return 0
+    done
+    return 1
+}
+
+# A libc/loader store dir must never enter the search path: it is inherited by
+# every child process, and a Nix libc.so.6 under a mismatched ld.so aborts the
+# process ("undefined symbol: __pointer_chk_guard"). That kills the `ld` that
 # find_library() shells out to, so lookups fail. Why: PR #78.
 is_libc_dir() {
-    local f
-    for f in libc.so.6 libc.musl-*.so.1 ld-linux-*.so.* ld.so.* libSystem.B.dylib; do
-        compgen -G "$1/$f" > /dev/null && return 0
+    local pat
+    for pat in 'libc.so.6' 'libc.musl-*.so.1' 'ld-linux-*.so.*' 'ld.so.*' 'libSystem.B.dylib'; do
+        glob_matches "$1/$pat" && return 0
     done
     return 1
 }
@@ -197,7 +209,7 @@ for store_path in $(nix-store -qR "$VENV_PATH" 2>/dev/null); do
     lib_dir="$store_path/lib"
     [ -d "$lib_dir" ] || continue
     # Only add dirs that actually have shared libraries
-    compgen -G "$lib_dir/*.so*" > /dev/null || compgen -G "$lib_dir/*.dylib*" > /dev/null || continue
+    glob_matches "$lib_dir/*.so*" || glob_matches "$lib_dir/*.dylib*" || continue
     if is_libc_dir "$lib_dir"; then
         echo "  skipping libc/loader dir: $lib_dir"
         continue
