@@ -175,32 +175,57 @@ if [ ! -x "$PYTHON" ]; then
     exit 1
 fi
 
-# Build LD_LIBRARY_PATH from the venv's Nix closure.
+# Build a library search path from the venv's Nix closure.
 # propagatedBuildInputs puts runtime libs in the closure, but Python's
-# ctypes.util.find_library needs LD_LIBRARY_PATH to discover them.
+# ctypes.util.find_library needs a search path to discover them.
+
+# A libc/loader store dir must never enter this path: it is inherited by every
+# child process, and a Nix libc.so.6 under a mismatched ld.so aborts the process
+# ("undefined symbol: __pointer_chk_guard"). That kills the `ld` that
+# find_library() shells out to, so lookups fail. Why: PR #78.
+is_libc_dir() {
+    local f
+    for f in libc.so.6 libc.musl-*.so.1 ld-linux-*.so.* ld.so.* libSystem.B.dylib; do
+        compgen -G "$1/$f" > /dev/null && return 0
+    done
+    return 1
+}
+
 LIB_PATH=""
-for lib_dir in $(find "$VENV_PATH" -name "lib" -path "*/nix/store/*" -type d 2>/dev/null | head -0); do true; done
-# Scan the closure for lib directories containing .so files
+# Scan the closure for lib directories containing shared libraries
 for store_path in $(nix-store -qR "$VENV_PATH" 2>/dev/null); do
-    if [ -d "$store_path/lib" ]; then
-        # Only add dirs that actually have shared libraries
-        if ls "$store_path/lib/"*.so* &>/dev/null || ls "$store_path/lib/"*.dylib* &>/dev/null; then
-            LIB_PATH="${LIB_PATH:+$LIB_PATH:}$store_path/lib"
-        fi
+    lib_dir="$store_path/lib"
+    [ -d "$lib_dir" ] || continue
+    # Only add dirs that actually have shared libraries
+    compgen -G "$lib_dir/*.so*" > /dev/null || compgen -G "$lib_dir/*.dylib*" > /dev/null || continue
+    if is_libc_dir "$lib_dir"; then
+        echo "  skipping libc/loader dir: $lib_dir"
+        continue
     fi
+    LIB_PATH="${LIB_PATH:+$LIB_PATH:}$lib_dir"
 done
 if [ -n "$LIB_PATH" ]; then
-    echo "Setting LD_LIBRARY_PATH from closure ($(echo "$LIB_PATH" | tr ':' '\n' | wc -l) dirs)"
-    export LD_LIBRARY_PATH="$LIB_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    export DYLD_LIBRARY_PATH="$LIB_PATH${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    echo "Library search path from closure ($(echo "$LIB_PATH" | tr ':' '\n' | wc -l) dirs)"
 fi
+
+# Prefix assignments keep the search path scoped to this one child. Exporting it
+# would break host binaries (rm, fc-list) run later in this script. Why: PR #78.
+run_import_check() {
+    if [ -n "$LIB_PATH" ]; then
+        LD_LIBRARY_PATH="$LIB_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        DYLD_LIBRARY_PATH="$LIB_PATH${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+            "$PYTHON" -c "$1" 2>&1
+    else
+        "$PYTHON" -c "$1" 2>&1
+    fi
+}
 
 FAILED=0
 for entry in "${PACKAGES[@]}"; do
     pkg="${entry%%:*}"
     check="${entry#*:}"
     echo -n "  $pkg ... "
-    if output=$("$PYTHON" -c "$check" 2>&1); then
+    if output=$(run_import_check "$check"); then
         echo "OK ($output)"
     else
         echo "FAIL"
