@@ -52,3 +52,7 @@ path = "tests/nixpkgs_python.rs"
 [[test]]
 name = "reconcile"
 path = "tests/reconcile.rs"
+
+[[test]]
+name = "nix_patch"
+path = "tests/nix_patch.rs"

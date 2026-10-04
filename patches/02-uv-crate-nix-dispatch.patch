@@ -88,7 +88,7 @@ index c8c8ef8..edb4d8a 100644
  };
  use uv_client::BaseClientBuilder;
  use uv_command_support::{ExitStatus, Printer, UvError};
-@@ -1472,6 +1473,54 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
+@@ -1472,6 +1473,55 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
              ))
              .await
          }
@@ -103,6 +103,7 @@ index c8c8ef8..edb4d8a 100644
 +                path: args.path,
 +                only_python: args.only_python,
 +                only_packages: args.only_packages,
++                recreate: args.recreate,
 +                packages: args.packages,
 +                patchelf: args.patchelf,
 +                interpreter: args.interpreter,
