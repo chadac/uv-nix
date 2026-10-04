@@ -552,6 +552,21 @@ pub fn resolve_extra_libraries(start: &Path) -> Option<String> {
     }
 }
 
+/// Warn that a uv-provided CPython will not work under nix.
+///
+/// `uv python install` still downloads uv's prebuilt interpreters, but uv-nix
+/// never selects them and no longer patches them: they live in a
+/// machine-global cache that patching would mutate for every other project on
+/// the host. Unpatched, their ELF interpreter and RPATH point outside the
+/// store, so on NixOS they generally cannot run at all.
+pub fn warn_bundled_python_unsupported() {
+    status_warn("uv's prebuilt Python distributions are not nix-compatible");
+    eprintln!("     uv-nix resolves interpreters from nixpkgs, so this install will not be used.");
+    eprintln!("     It is also left unpatched, and on NixOS will likely fail to run.");
+    eprintln!("     Prefer a nixpkgs Python: set requires-python, or pin nixpkgs to a");
+    eprintln!("     revision providing the version you need.");
+}
+
 /// Nix-provided interpreters that may satisfy a uv interpreter request.
 ///
 /// Called from uv's discovery in place of downloading a bundled CPython. uv

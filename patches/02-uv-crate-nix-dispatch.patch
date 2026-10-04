@@ -32,6 +32,19 @@ index 0ac3903..735df8a 100644
          logger.on_install(installs.len(), start, printer, DryRun::Disabled)?;
      }
  
+diff --git a/crates/uv/src/commands/python/install.rs b/crates/uv/src/commands/python/install.rs
+--- a/crates/uv/src/commands/python/install.rs
++++ b/crates/uv/src/commands/python/install.rs
+@@ -692,6 +692,9 @@ async fn perform_install(
+         if let Err(e) = installation.ensure_dylib_patched() {
+             e.warn_user(installation);
+         }
++        // Not patched for nix on purpose: these live in a machine-global cache.
++        // Warn rather than silently hand back an interpreter that can't run.
++        uv_nix::warn_bundled_python_unsupported();
+ 
+         let upgradeable = (default || is_default_install)
+             || requested_minor_versions.contains(&installation.key().version().python_version());
 diff --git a/crates/uv/src/lib.rs b/crates/uv/src/lib.rs
 index fa5c142..ac8ff78 100644
 --- a/crates/uv/src/lib.rs
