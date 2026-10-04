@@ -589,22 +589,6 @@ pub fn patch_binaries(binaries: &[PathBuf], config: &PatchConfig) -> anyhow::Res
     Ok(())
 }
 
-/// Patch all native binaries found in a directory (platform-aware).
-///
-/// On Linux: finds and patches ELF binaries with `patchelf`.
-/// On Darwin: finds and patches Mach-O binaries with `install_name_tool`.
-pub fn patch_directory(dir: &Path, config: &PatchConfig) -> anyhow::Result<()> {
-    let binaries = find_native_binaries(dir, config.is_darwin);
-    let binary_type = if config.is_darwin { "Mach-O" } else { "ELF" };
-    debug!(
-        "Found {} {} binaries to patch in {}",
-        binaries.len(),
-        binary_type,
-        dir.display()
-    );
-    patch_binaries(&binaries, config)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

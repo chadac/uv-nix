@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use tracing::debug;
@@ -143,16 +142,6 @@ pub fn status_warn(message: &str) {
     } else {
         eprintln!("     warning: {message}");
     }
-}
-
-/// Handler for `uv nix hello`.
-pub fn nix_hello(name: Option<String>) -> anyhow::Result<()> {
-    let greeting = match name {
-        Some(ref n) => format!("Hello, {n}! uv-nix is working."),
-        None => "Hello from uv-nix! The nix subcommand is working.".to_string(),
-    };
-    writeln!(std::io::stdout(), "{greeting}")?;
-    Ok(())
 }
 
 /// Check if timing instrumentation is enabled via `UV_NIX_TIMING=1`.
@@ -592,31 +581,4 @@ pub fn nix_python_candidates(request: Option<&str>) -> Vec<PathBuf> {
     }
 
     candidates
-}
-
-/// Handler for `uv nix patch-env` — manually patch a virtual environment.
-pub fn patch_env(
-    path: &Path,
-    patchelf: Option<PathBuf>,
-    interpreter: Option<PathBuf>,
-    rpath: Option<String>,
-) -> anyhow::Result<()> {
-    let config = patchelf::PatchConfig::from_overrides(patchelf, interpreter, rpath);
-    patchelf::patch_directory(path, &config)
-}
-
-/// Handler for `uv nix patch-python` — manually patch a Python installation.
-pub fn patch_python(
-    path: &Path,
-    patchelf: Option<PathBuf>,
-    interpreter: Option<PathBuf>,
-    rpath: Option<String>,
-) -> anyhow::Result<()> {
-    let config = patchelf::PatchConfig::from_overrides(patchelf, interpreter, rpath);
-    patchelf::patch_directory(path, &config)?;
-
-    // Install ctypes hook so dlopen() can find Nix libraries
-    ctypes_hook::install_hook_for_python(path, &config.rpath);
-
-    Ok(())
 }
