@@ -1,5 +1,5 @@
 diff --git a/crates/uv-python/Cargo.toml b/crates/uv-python/Cargo.toml
-index b2fe30c..f9c9712 100644
+index 2273163..5393314 100644
 --- a/crates/uv-python/Cargo.toml
 +++ b/crates/uv-python/Cargo.toml
 @@ -37,6 +37,7 @@ uv-redacted = { workspace = true }
@@ -11,12 +11,12 @@ index b2fe30c..f9c9712 100644
  
  anyhow = { workspace = true }
 diff --git a/crates/uv-python/src/installation.rs b/crates/uv-python/src/installation.rs
-index 0449614..99998a5 100644
+index 8223649..f9695a8 100644
 --- a/crates/uv-python/src/installation.rs
 +++ b/crates/uv-python/src/installation.rs
-@@ -143,6 +143,12 @@ impl PythonInstallation {
+@@ -197,6 +197,12 @@ impl PythonInstallation {
  
-         let err = match Self::find_existing(request, environments, preference, cache) {
+         let err = match Self::find_existing(request, environments, preference, arch, cache) {
              Ok(installation) => {
 +                // Ensure managed Python is patched for Nix on first use.
 +                if installation.is_managed() {
@@ -27,7 +27,7 @@ index 0449614..99998a5 100644
                  installation
                      .download_and_warn_if_outdated_prerelease(
                          request,
-@@ -324,6 +330,9 @@ impl PythonInstallation {
+@@ -379,6 +385,9 @@ impl PythonInstallation {
              e.warn_user(&installed);
          }
  
