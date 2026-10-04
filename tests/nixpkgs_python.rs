@@ -1,9 +1,10 @@
 //! End-to-end checks that Python comes from nixpkgs by default.
 //!
 //! uv's own default is `python-preference = managed`, which prefers uv's
-//! downloaded CPython builds over interpreters found on PATH. uv-nix inverts
-//! that: a nixpkgs-provided interpreter wins by default, and uv's bundled
-//! builds are only a fallback for versions nixpkgs doesn't provide.
+//! downloaded CPython builds over interpreters found on PATH. uv-nix makes nix
+//! the only source: a nixpkgs interpreter is used, or resolution fails with an
+//! error. uv's bundled builds are never a fallback — they would have to be
+//! patched inside a machine-global cache to run under nix.
 //!
 //! These tests drive the real patched `uv` binary end to end. Each one runs
 //! with an isolated HOME / cache / `UV_PYTHON_INSTALL_DIR` so a bundled
@@ -435,4 +436,122 @@ fn uv_run_executes_against_nixpkgs_python() {
         "uv run used uv's bundled Python at {}",
         base_prefix.display()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Nix-resolution hook
+//
+// The tests above keep PATH intact, so uv's ordinary discovery finds the dev
+// shell's /nix/store python3 and `find_or_download` -- where the nix hook
+// lives -- is never reached. These scrub every python-providing entry from
+// PATH, which is what a user's shell actually looks like, so the hook is the
+// only thing that can supply an interpreter.
+// ---------------------------------------------------------------------------
+
+/// PATH with every entry that provides a `python`/`python3` removed.
+///
+/// `nix` itself must stay reachable: the hook shells out to it.
+fn path_without_python() -> std::ffi::OsString {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let kept: Vec<PathBuf> = std::env::split_paths(&path)
+        .filter(|dir| {
+            !["python", "python3"]
+                .iter()
+                .any(|exe| dir.join(exe).exists())
+        })
+        .collect();
+    std::env::join_paths(kept).expect("failed to rebuild PATH")
+}
+
+/// A project with an explicit `requires-python`, no `.python-version` pin.
+fn project_requiring(requires_python: &str) -> Project {
+    let project = Project::new();
+    std::fs::write(
+        project.dir.path().join("pyproject.toml"),
+        format!(
+            "[project]\n\
+             name = \"nixpkgs-python-e2e\"\n\
+             version = \"0.1.0\"\n\
+             requires-python = \"{requires_python}\"\n\
+             \n\
+             [tool.uv]\n\
+             package = false\n"
+        ),
+    )
+    .expect("failed to write pyproject.toml");
+    project
+}
+
+/// An open-ended `requires-python` and nothing else: the shape `uv init`
+/// produces, and the one users hit first.
+#[test]
+fn nix_resolution_supplies_python_for_open_ended_requires_python() {
+    let _nixpkgs = require_nixpkgs_python!();
+    let project = project_requiring(">=3.12");
+
+    run(
+        "uv venv (no python on PATH)",
+        project
+            .uv()
+            .env("PATH", path_without_python())
+            .args(["venv", ".venv"]),
+    );
+
+    assert_nixpkgs_interpreter("uv venv (no python on PATH)", &project.venv_python());
+    assert!(
+        project.materialized_bundled().is_empty(),
+        "uv downloaded a bundled Python instead of resolving one from nixpkgs: {:?}",
+        project.materialized_bundled()
+    );
+}
+
+/// A minor series pinned through `requires-python` alone -- no
+/// `.python-version` -- must reach the matching `pythonXY` attribute.
+#[test]
+fn nix_resolution_honors_minor_pinned_in_requires_python() {
+    let _nixpkgs = require_nixpkgs_python!();
+    let project = project_requiring("==3.12.*");
+
+    run(
+        "uv venv (==3.12.*)",
+        project
+            .uv()
+            .env("PATH", path_without_python())
+            .args(["venv", ".venv"]),
+    );
+
+    let resolved = assert_nixpkgs_interpreter("uv venv (==3.12.*)", &project.venv_python());
+    let version = run("python --version", Command::new(&resolved).arg("--version"));
+    assert!(
+        version.contains("3.12."),
+        "expected a 3.12 interpreter for ==3.12.*, got {version:?} at {}",
+        resolved.display()
+    );
+}
+
+/// No constraint anywhere: the default `python3` from the project's nixpkgs.
+#[test]
+fn nix_resolution_supplies_default_python_with_no_constraint() {
+    let _nixpkgs = require_nixpkgs_python!();
+    let project = Project::new();
+    std::fs::write(
+        project.dir.path().join("pyproject.toml"),
+        "[project]\n\
+         name = \"nixpkgs-python-e2e\"\n\
+         version = \"0.1.0\"\n\
+         \n\
+         [tool.uv]\n\
+         package = false\n",
+    )
+    .expect("failed to write pyproject.toml");
+
+    run(
+        "uv venv (unconstrained)",
+        project
+            .uv()
+            .env("PATH", path_without_python())
+            .args(["venv", ".venv"]),
+    );
+
+    assert_nixpkgs_interpreter("uv venv (unconstrained)", &project.venv_python());
 }

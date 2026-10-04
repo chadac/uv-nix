@@ -173,29 +173,99 @@ pub fn find_nixpkgs_python(
         }
     }
 
-    // Try python3 (default)
-    if let Ok(python_path) = resolve_python_from_nixpkgs("python3", &source)
-        && let Ok(version) = get_python_version(&python_path)
-        && requirement.specifiers.contains(&version)
+    // nixpkgs' own default, `python3`. Probed by eval rather than build: a
+    // miss here is the common case for a pinned minor series, and building a
+    // whole interpreter to learn its version costs minutes.
+    let default_version = nixpkgs_attr_version("python3", &source);
+    if let Ok(ref version) = default_version
+        && requirement.specifiers.contains(version)
     {
-        debug!(
-            "Found matching default nixpkgs Python: {}",
-            python_path.display()
-        );
-        return Ok(Some(python_path));
+        match resolve_python_from_nixpkgs("python3", &source) {
+            Ok(python_path) => {
+                debug!(
+                    "Found matching default nixpkgs Python: {}",
+                    python_path.display()
+                );
+                return Ok(Some(python_path));
+            }
+            // Don't give up: a lower minor may satisfy the request too.
+            Err(err) => debug!("Failed to build the default nixpkgs python3: {err}"),
+        }
+    }
+
+    // Narrow: walk the `pythonXY` attributes below nixpkgs' default, newest
+    // first, so a bounded `requires-python` (`==3.12.*`, `>=3.11,<3.13`) is
+    // satisfied without a `.python-version` pin. The default's own minor is
+    // the upper bound, so a nixpkgs bump extends the search by itself.
+    if let Ok(default_version) = default_version
+        && let Some(upper) = minor_of(&default_version)
+    {
+        for minor in (OLDEST_SEARCHED_MINOR..upper).rev() {
+            let attr = format!("python3{minor}");
+            let Ok(version) = nixpkgs_attr_version(&attr, &source) else {
+                continue;
+            };
+            if !requirement.specifiers.contains(&version) {
+                continue;
+            }
+            match resolve_python_from_nixpkgs(&attr, &source) {
+                Ok(python_path) => {
+                    debug!("Found matching nixpkgs {attr}: {}", python_path.display());
+                    return Ok(Some(python_path));
+                }
+                Err(err) => debug!("Failed to build nixpkgs {attr}: {err}"),
+            }
+        }
     }
 
     Ok(None)
 }
 
+/// Oldest `python3X` minor worth probing; below this nixpkgs has nothing
+/// installable for the versions uv supports.
+const OLDEST_SEARCHED_MINOR: u64 = 9;
+
+/// The `3.X` minor of a CPython version, if it has one.
+fn minor_of(version: &Version) -> Option<u64> {
+    let release = version.release();
+    if release.first() != Some(&3) {
+        return None;
+    }
+    release.get(1).copied()
+}
+
+/// Evaluate a nixpkgs Python attribute's `version` without building it.
+fn nixpkgs_attr_version(attr: &str, source: &nixpkgs::NixpkgsSource) -> Result<Version> {
+    let pkgs_expr = nixpkgs::nixpkgs_import_expr(source);
+    let expr = format!("({pkgs_expr}).{attr}.version");
+
+    let mut cmd = crate::nix_command();
+    cmd.args(["eval", "--raw"]);
+    if nixpkgs::requires_impure(source) {
+        cmd.arg("--impure");
+    }
+    let output = cmd
+        .arg("--expr")
+        .arg(&expr)
+        .output()
+        .context("Failed to run nix eval")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "nix eval failed for {attr}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let version_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Version::from_str(&version_str)
+        .with_context(|| format!("Failed to parse {attr} version: {version_str}"))
+}
+
 /// Resolve a Python binary path from nixpkgs.
 fn resolve_python_from_nixpkgs(attr: &str, source: &nixpkgs::NixpkgsSource) -> Result<PathBuf> {
     let pkgs_expr = nixpkgs::nixpkgs_import_expr(source);
-    let expr = if attr == "python3" {
-        format!("({pkgs_expr})")
-    } else {
-        format!("({pkgs_expr}).{attr}")
-    };
+    let expr = format!("({pkgs_expr}).{attr}");
 
     let mut cmd = crate::nix_command();
     cmd.args(["build", "--no-link", "--print-out-paths"]);
