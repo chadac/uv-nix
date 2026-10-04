@@ -82,8 +82,8 @@ check:
 # Test commands
 # =============================================================================
 
-# Run the default test set (wheel installs + nixpkgs Python preference + patch reconcile)
-test: test-wheel test-nixpkgs-python test-reconcile
+# Run the default test set (wheel installs + nixpkgs Python preference + patch reconcile + ctypes hook)
+test: test-wheel test-nixpkgs-python test-reconcile test-ctypes-hook
 
 # Run wheel install tests
 test-wheel: build
@@ -96,6 +96,11 @@ test-nixpkgs-python: build
 # Run patch-reconcile e2e tests (no-op syncs must still patch the venv)
 test-reconcile: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test reconcile -- --test-threads=2
+
+# Run ctypes-hook e2e tests (find_library against nix libraries)
+test-ctypes-hook: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test ctypes_hook -- --test-threads=2
+
 
 # Run source build tests (slow)
 test-source: build
@@ -140,7 +145,7 @@ test-nix-gen-heavy: build
     UV_BIN="$(pwd)/uv/target/debug/uv" bash tests/nix-gen/test-nix-gen-heavy.sh
 
 # Run all test suites
-test-all: test-wheel test-nixpkgs-python test-source test-docker test-nix-gen test-nix-gen-heavy
+test-all: test-wheel test-nixpkgs-python test-ctypes-hook test-source test-docker test-nix-gen test-nix-gen-heavy
 
 # Clear test venv cache
 test-clean:
