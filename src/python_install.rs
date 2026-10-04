@@ -3,12 +3,18 @@
 //! This module provides logic to detect and prefer Python from nixpkgs
 //! instead of uv's managed Python installations when a compatible version
 //! is available.
+//!
+//! Version parsing/matching reuses uv's own PEP 440 engine (`pep440_rs`, the
+//! published form of uv's in-tree `uv_pep440`) rather than a bespoke parser,
+//! so `requires-python` specifiers and `.python-version` pins are interpreted
+//! exactly as uv interprets them.
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use semver::VersionReq;
+use pep440_rs::{Version, VersionSpecifiers};
 use tracing::debug;
 
 use crate::{config, nixpkgs};
@@ -16,9 +22,11 @@ use crate::{config, nixpkgs};
 /// Python version requirement extracted from project files.
 #[derive(Debug, Clone)]
 pub struct PythonRequirement {
-    /// Semver requirement (e.g., ">=3.10,<3.13")
-    pub version: VersionReq,
-    /// Minor version if specified (e.g., "3.12" -> Some((3, 12)))
+    /// PEP 440 specifiers a candidate interpreter must satisfy
+    /// (e.g. `>=3.10,<3.13`, or `==3.12.*` for a bare `3.12` pin).
+    pub specifiers: VersionSpecifiers,
+    /// Minor version if a bare `3.12`/`3.12.1` pin was given, used to
+    /// query the matching `pythonXY` nixpkgs attribute directly.
     pub minor: Option<(u8, u8)>,
 }
 
@@ -46,9 +54,10 @@ pub fn find_python_requirement(project_dir: &Path) -> Option<PythonRequirement> 
 /// Read Python version from `.python-version` file.
 fn read_python_version_file(project_dir: &Path) -> Option<PythonRequirement> {
     let path = project_dir.join(".python-version");
-    let content = fs::read_to_string(&path).ok()?.trim().to_string();
+    let content = fs::read_to_string(&path).ok()?;
+    let line = content.lines().next()?.trim();
 
-    parse_python_version(&content)
+    parse_python_pin(line)
 }
 
 /// Read Python version requirement from `uv.lock`.
@@ -59,8 +68,8 @@ fn read_uv_lock_python(project_dir: &Path) -> Option<PythonRequirement> {
     // Look for "requires-python = " line
     for line in content.lines() {
         if let Some(version_str) = line.strip_prefix("requires-python = ") {
-            let version_str = version_str.trim_matches('"').trim_matches('\'');
-            return parse_python_version(version_str);
+            let version_str = version_str.trim().trim_matches('"').trim_matches('\'');
+            return parse_requires_python(version_str);
         }
     }
 
@@ -76,51 +85,44 @@ fn read_pyproject_python(project_dir: &Path) -> Option<PythonRequirement> {
     // Look for [project].requires-python
     let requires_python = doc.get("project")?.get("requires-python")?.as_str()?;
 
-    parse_python_version(requires_python)
+    parse_requires_python(requires_python)
 }
 
-/// Parse a Python version string into a requirement.
+/// Parse a `requires-python` value (a PEP 440 specifier set, e.g. `>=3.10,<3.13`).
+fn parse_requires_python(value: &str) -> Option<PythonRequirement> {
+    let specifiers = VersionSpecifiers::from_str(value.trim()).ok()?;
+    Some(PythonRequirement {
+        specifiers,
+        minor: None,
+    })
+}
+
+/// Parse a `.python-version` pin (a bare version like `3.12` or `3.12.1`,
+/// optionally prefixed by an implementation such as `cpython@`).
 ///
-/// Handles formats like:
-/// - "3.12" -> minor version match
-/// - "3.12.1" -> exact version
-/// - ">=3.10,<3.13" -> version range
-fn parse_python_version(version_str: &str) -> Option<PythonRequirement> {
-    let version_str = version_str.trim();
+/// A bare `major.minor` pin is treated as `==major.minor.*`; a full
+/// `major.minor.patch` pin as `==major.minor.patch`.
+fn parse_python_pin(pin: &str) -> Option<PythonRequirement> {
+    // Strip an optional implementation prefix, e.g. `cpython@3.12` / `pypy@3.10`.
+    let version_part = pin.rsplit(['@', '-']).next()?.trim();
 
-    // If it's a simple "3.12" format, extract minor version
-    if let Some((major, minor)) = parse_simple_version(version_str) {
-        // Create a semver range for the minor version (3.12.* matches 3.12.0-3.12.999)
-        let semver_str = format!("~{major}.{minor}");
-        if let Ok(version) = VersionReq::parse(&semver_str) {
-            return Some(PythonRequirement {
-                version,
-                minor: Some((major, minor)),
-            });
-        }
-    }
+    let parts: Vec<&str> = version_part.split('.').collect();
+    let major: u8 = parts.first()?.parse().ok()?;
+    let minor: u8 = parts.get(1)?.parse().ok()?;
 
-    // Try parsing as semver range
-    if let Ok(version) = VersionReq::parse(version_str) {
-        return Some(PythonRequirement {
-            version,
-            minor: None,
-        });
-    }
-
-    None
-}
-
-/// Parse a simple "3.12" or "3.12.1" version into (major, minor).
-fn parse_simple_version(s: &str) -> Option<(u8, u8)> {
-    let parts: Vec<&str> = s.split('.').collect();
-    if parts.len() >= 2 {
-        let major = parts[0].parse().ok()?;
-        let minor = parts[1].parse().ok()?;
-        Some((major, minor))
+    let spec_str = if parts.len() >= 3 && parts[2].chars().all(|c| c.is_ascii_digit()) {
+        // Exact patch pin.
+        format!("=={version_part}")
     } else {
-        None
-    }
+        // Minor pin: match the whole minor series.
+        format!("=={major}.{minor}.*")
+    };
+
+    let specifiers = VersionSpecifiers::from_str(&spec_str).ok()?;
+    Some(PythonRequirement {
+        specifiers,
+        minor: Some((major, minor)),
+    })
 }
 
 /// Check if nixpkgs provides a Python version matching the requirement.
@@ -141,7 +143,7 @@ pub fn find_nixpkgs_python(
         let attr = format!("python{major}{minor}");
         if let Ok(python_path) = resolve_python_from_nixpkgs(&attr, &source)
             && let Ok(version) = get_python_version(&python_path)
-            && requirement.version.matches(&version)
+            && requirement.specifiers.contains(&version)
         {
             debug!(
                 "Found matching nixpkgs Python {}.{}: {}",
@@ -156,7 +158,7 @@ pub fn find_nixpkgs_python(
     // Try python3 (default)
     if let Ok(python_path) = resolve_python_from_nixpkgs("python3", &source)
         && let Ok(version) = get_python_version(&python_path)
-        && requirement.version.matches(&version)
+        && requirement.specifiers.contains(&version)
     {
         debug!(
             "Found matching default nixpkgs Python: {}",
@@ -202,8 +204,8 @@ fn resolve_python_from_nixpkgs(attr: &str, source: &nixpkgs::NixpkgsSource) -> R
     }
 }
 
-/// Get the version of a Python binary.
-fn get_python_version(python_bin: &Path) -> Result<semver::Version> {
+/// Get the version of a Python binary as a PEP 440 version.
+fn get_python_version(python_bin: &Path) -> Result<Version> {
     let output = Command::new(python_bin)
         .arg("--version")
         .output()
@@ -220,6 +222,6 @@ fn get_python_version(python_bin: &Path) -> Result<semver::Version> {
         .strip_prefix("Python ")
         .context("Invalid Python version output")?;
 
-    semver::Version::parse(version_str)
+    Version::from_str(version_str)
         .with_context(|| format!("Failed to parse Python version: {version_str}"))
 }
