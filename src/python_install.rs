@@ -88,6 +88,24 @@ fn read_pyproject_python(project_dir: &Path) -> Option<PythonRequirement> {
     parse_requires_python(requires_python)
 }
 
+/// Parse a version request string into a requirement.
+///
+/// Accepts both a PEP 440 specifier set (`>=3.10,<3.13`) and a bare pin
+/// (`3.12`, `cpython@3.12`), so uv's canonical request strings and the
+/// contents of `.python-version` are both handled.
+pub fn parse_request(request: &str) -> Option<PythonRequirement> {
+    parse_requires_python(request).or_else(|| parse_python_pin(request))
+}
+
+/// Resolve the default `python3` from the project's nixpkgs.
+pub fn resolve_default_python(project_dir: &Path) -> Result<PathBuf> {
+    let uv_nix_config = config::find_config(project_dir)
+        .map(|(c, _)| c)
+        .unwrap_or_default();
+    let source = nixpkgs::resolve_nixpkgs(project_dir, &uv_nix_config);
+    resolve_python_from_nixpkgs("python3", &source)
+}
+
 /// Parse a `requires-python` value (a PEP 440 specifier set, e.g. `>=3.10,<3.13`).
 fn parse_requires_python(value: &str) -> Option<PythonRequirement> {
     let specifiers = VersionSpecifiers::from_str(value.trim()).ok()?;

@@ -16,6 +16,7 @@ pub mod nixgen;
 pub mod nixpkgs;
 pub mod patchelf;
 pub mod python_install;
+pub mod python_provider;
 pub mod rust_overlay;
 pub mod soname;
 
@@ -551,131 +552,31 @@ pub fn resolve_extra_libraries(start: &Path) -> Option<String> {
     }
 }
 
-/// Check if a Python installation is musl-linked (e.g., Alpine).
+/// Nix-provided interpreters that may satisfy a uv interpreter request.
 ///
-/// Our patching sets glibc-based interpreter and RPATH, which would break
-/// musl-linked binaries. Detected via directory name convention first,
-/// then by checking the ELF interpreter of the Python binary.
-fn is_musl_python(python_dir: &Path) -> bool {
-    // Fast check: uv's managed Python naming convention includes "musl"
-    if let Some(name) = python_dir.file_name().and_then(|n| n.to_str())
-        && name.contains("musl")
-    {
-        return true;
-    }
-
-    // Fallback: check the ELF interpreter of the Python binary
-    // (only applicable on Linux — Darwin doesn't have ELF interpreters)
-    #[cfg(target_os = "linux")]
-    {
-        let nix = nix_config::require();
-        let patcher = &nix.patcher;
-        let bin_dir = python_dir.join("bin");
-        if let Ok(entries) = fs::read_dir(&bin_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                if name_str.starts_with("python3") && !name_str.contains('-') {
-                    let output = std::process::Command::new(patcher)
-                        .arg("--print-interpreter")
-                        .arg(entry.path())
-                        .output();
-                    if let Ok(out) = output {
-                        let interp = String::from_utf8_lossy(&out.stdout);
-                        if interp.contains("musl") {
-                            return true;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    false
-}
-
-/// Check if a nixpkgs Python is available and compatible with project requirements.
+/// Called from uv's discovery in place of downloading a bundled CPython. uv
+/// validates each candidate against the original request itself, so the
+/// matching semantics stay uv's.
 ///
-/// Returns `Some(path)` if a suitable nixpkgs Python is found.
-/// This can be used to inform users about available alternatives to managed Python.
-pub fn check_nixpkgs_python_available(project_dir: &Path) -> Option<PathBuf> {
-    // Find Python requirement from project files
-    let requirement = python_install::find_python_requirement(project_dir)?;
+/// `request` is uv's canonical request string (`3.12`, `>=3.11`, ...);
+/// `None` means no explicit version was asked for.
+pub fn nix_python_candidates(request: Option<&str>) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let project_dir = nix_config::find_project_root(&cwd).unwrap_or(cwd);
 
-    // Check if nixpkgs has a matching Python
-    match python_install::find_nixpkgs_python(project_dir, &requirement) {
-        Ok(Some(path)) => Some(path),
-        Ok(None) => {
-            debug!("No matching nixpkgs Python found for requirement");
-            None
-        }
-        Err(err) => {
-            debug!("Failed to check nixpkgs Python: {err}");
-            None
-        }
-    }
-}
+    let candidates = python_provider::candidates(request, &project_dir);
 
-/// Called automatically after `uv python install` to patch the Python interpreter.
-///
-/// `python_dir` is the installation directory (e.g., `cpython-3.12.13-linux-x86_64-gnu/`)
-/// containing `bin/`, `lib/`, etc.
-///
-/// Uses nix to resolve library paths and patchelf/install_name_tool, then patches
-/// ELF/Mach-O binaries in place and installs the ctypes hook.
-///
-/// When `UV_NIX_PREFER_NIXPKGS_PYTHON=1` is set, checks if a compatible nixpkgs
-/// Python is available and informs the user before patching the managed install.
-pub fn post_python_install_patch(python_dir: &Path) {
-    // Skip musl-linked Python — our glibc paths would break it
-    if is_musl_python(python_dir) {
-        debug!(
-            "Skipping patching for musl-linked Python: {}",
-            python_dir.display()
-        );
-        return;
+    if candidates.is_empty() {
+        status_warn(&format!(
+            "nixpkgs provides no Python matching {}",
+            request.unwrap_or("this project's requires-python")
+        ));
+        eprintln!("     uv-nix never uses uv's bundled interpreters: they live in a");
+        eprintln!("     machine-global cache and would have to be patched in place.");
+        eprintln!("     Relax requires-python, or pin nixpkgs to a revision that has it.");
     }
 
-    // When opted in, inform the user if nixpkgs already offers a compatible
-    // Python — managed Python still gets patched, this is advisory only.
-    if std::env::var("UV_NIX_PREFER_NIXPKGS_PYTHON").is_ok_and(|v| v == "1") {
-        use std::io::IsTerminal;
-
-        // Only show informational messages in interactive terminals
-        if std::io::stderr().is_terminal() && std::env::var("UV_NIX_SUPPRESS_WARNINGS").is_err() {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let project_dir = nix_config::find_project_root(&cwd).unwrap_or(cwd);
-
-            if let Some(nixpkgs_python) = check_nixpkgs_python_available(&project_dir) {
-                status_warn(&format!(
-                    "A compatible nixpkgs Python is available at {}",
-                    nixpkgs_python.display()
-                ));
-                eprintln!(
-                    "     Consider using it in your dev environment instead of managed Python."
-                );
-                eprintln!("     See uv-nix documentation for nix-managed Python setup.");
-            }
-        }
-    }
-
-    // Nix is required — require() exits with error if not available
-    let _nix = nix_config::require();
-
-    let config = patchelf::PatchConfig::from_env();
-
-    let python_name = python_dir.file_name().unwrap_or_default().to_string_lossy();
-    status("Patching", &format!("{python_name} (nix)"));
-
-    if let Err(err) = patchelf::patch_directory(python_dir, &config) {
-        status_warn(&format!("Failed to patch ELF binaries: {err}"));
-        return;
-    }
-
-    ctypes_hook::install_hook_for_python(python_dir, &config.rpath);
-
-    status("Patched", &format!("{python_name}"));
+    candidates
 }
 
 /// Handler for `uv nix patch-env` — manually patch a virtual environment.

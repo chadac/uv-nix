@@ -82,20 +82,20 @@ check:
 # Test commands
 # =============================================================================
 
-# Run wheel install tests (default)
-test: test-wheel
+# Run the default test set (wheel installs + nixpkgs Python preference)
+test: test-wheel test-nixpkgs-python
 
 # Run wheel install tests
 test-wheel: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test wheel_install -- --test-threads=4
 
+# Run nixpkgs-Python e2e tests (nix Python must win over uv's bundled builds)
+test-nixpkgs-python: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test nixpkgs_python -- --test-threads=4
+
 # Run source build tests (slow)
 test-source: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test source_build -- --ignored --test-threads=2
-
-# Run Python patching tests
-test-patch: build
-    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test python_patch
 
 # Run Docker-based integration tests (pytest)
 # Usage: just test-docker [filter]
@@ -136,7 +136,7 @@ test-nix-gen-heavy: build
     UV_BIN="$(pwd)/uv/target/debug/uv" bash tests/nix-gen/test-nix-gen-heavy.sh
 
 # Run all test suites
-test-all: test-wheel test-source test-patch test-docker test-nix-gen test-nix-gen-heavy
+test-all: test-wheel test-nixpkgs-python test-source test-docker test-nix-gen test-nix-gen-heavy
 
 # Clear test venv cache
 test-clean:
