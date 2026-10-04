@@ -14,14 +14,16 @@ use std::process::Command;
 /// RPATH assertions below read clearly.
 const PACKAGE: &str = "markupsafe";
 
-fn patchelf() -> Option<PathBuf> {
-    let out = Command::new("sh")
-        .args(["-c", "command -v patchelf"])
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+/// uv's archive cache, which holds the wheels as they shipped.
+fn uv_cache_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("UV_CACHE_DIR") {
+        return PathBuf::from(dir);
+    }
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("uv")
 }
 
 /// Create a project with one native dependency and sync it.
@@ -52,6 +54,9 @@ fn synced_project() -> Option<tempfile::TempDir> {
 }
 
 /// Every extension module in the venv's site-packages.
+///
+/// CPython names extension modules `.so` on macOS too; `.dylib` is for the
+/// libraries they link against, which live in the store.
 fn extension_modules(venv: &Path) -> Vec<PathBuf> {
     walkdir::WalkDir::new(venv.join("lib"))
         .into_iter()
@@ -61,52 +66,92 @@ fn extension_modules(venv: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn rpath_entries(patchelf: &Path, binary: &Path) -> Vec<String> {
-    let out = Command::new(patchelf)
-        .arg("--print-rpath")
-        .arg(binary)
+/// The library search paths uv-nix recorded for a package, read back through
+/// `uv nix info`.
+///
+/// Goes through uv-nix rather than invoking patchelf directly so the
+/// assertions hold on both platforms: `get_rpath` reads ELF RPATH via
+/// patchelf on Linux and `LC_RPATH` via `otool -l` on macOS.
+fn recorded_rpaths(project: &Path, package: &str) -> Vec<String> {
+    let out = Command::new(UV_BIN.as_path())
+        .current_dir(project)
+        .args(["nix", "info", "--json", "--show-details"])
         .output()
-        .expect("failed to run patchelf --print-rpath");
+        .expect("failed to run uv nix info --json");
     assert!(
         out.status.success(),
-        "patchelf --print-rpath failed on {}",
-        binary.display()
+        "uv nix info --json failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .split(':')
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
+
+    let info: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("uv nix info emitted invalid JSON: {e}"));
+    let packages = info["packages"]
+        .as_array()
+        .expect("uv nix info reported no packages array");
+    let entry = packages
+        .iter()
+        .find(|p| p["name"].as_str() == Some(package))
+        .unwrap_or_else(|| panic!("uv nix info did not report {package}: {info:#}"));
+
+    entry["rpath_entries"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|e| e.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-fn strip_rpaths(patchelf: &Path, binaries: &[PathBuf]) {
+/// Restore each binary to the state the wheel shipped, by copying it back out
+/// of uv's archive cache.
+///
+/// That cache copy is pristine by construction: `break_hardlink` exists so
+/// patching a venv never writes through to the shared archive. Restoring from
+/// it simulates a venv uv-nix did not install into without needing
+/// platform-specific tooling (`--remove-rpath` has no portable equivalent, and
+/// on macOS the "already patched" check scans for any `/nix/store` string, so
+/// deleting `LC_RPATH`s alone would not look pristine).
+///
+/// Returns false when the cache layout does not yield a match, leaving the
+/// caller to skip rather than assert something untested.
+fn restore_pristine(cache_dir: &Path, binaries: &[PathBuf]) -> bool {
     for binary in binaries {
-        let status = Command::new(patchelf)
-            .arg("--remove-rpath")
-            .arg(binary)
-            .status()
-            .expect("failed to run patchelf --remove-rpath");
-        assert!(status.success(), "failed to strip {}", binary.display());
+        let name = binary.file_name().expect("binary has no file name");
+        let pristine = walkdir::WalkDir::new(cache_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path().to_path_buf())
+            .find(|p| p.file_name() == Some(name) && p != binary);
+
+        let Some(pristine) = pristine else {
+            eprintln!(
+                "skipping: no pristine copy of {} in {}",
+                name.to_string_lossy(),
+                cache_dir.display()
+            );
+            return false;
+        };
+        std::fs::copy(&pristine, binary).expect("failed to restore the pristine binary");
     }
+    true
 }
 
 /// `uv nix patch` must give a package binary the same minimal, soname-derived
-/// RPATH as `--only-packages`.
+/// library paths as `--only-packages`.
 ///
 /// It used to derive a libpython directory as `<python>/../../lib`, which for a
 /// venv is site-packages, and `find_native_binaries` walks recursively — so the
 /// default flags bulk-patched every extension module with the whole nix library
 /// map (13 entries instead of 2 for markupsafe) and the targeted pass then
 /// skipped them as already patched.
-#[cfg(target_os = "linux")]
+///
+/// Runs on macOS as well as Linux: the same walk would add the same over-broad
+/// set as `LC_RPATH` entries there.
 #[test]
 fn default_patch_does_not_apply_the_global_rpath_to_packages() {
-    let Some(patchelf) = patchelf() else {
-        eprintln!("skipping: patchelf not on PATH (not in the nix dev shell)");
-        return;
-    };
-
     let mut rpaths = Vec::new();
     for args in [
         vec!["nix", "patch"],
@@ -123,7 +168,14 @@ fn default_patch_does_not_apply_the_global_rpath_to_packages() {
             !binaries.is_empty(),
             "{PACKAGE} installed no extension module to patch"
         );
-        strip_rpaths(&patchelf, &binaries);
+
+        // Patch from the state the wheel shipped in, which is what patching an
+        // existing venv means. Without this the install hook has already
+        // applied the targeted paths and both invocations are no-ops, so the
+        // comparison proves nothing.
+        if !restore_pristine(&uv_cache_dir(), &binaries) {
+            return;
+        }
 
         let output = Command::new(UV_BIN.as_path())
             .current_dir(project.path())
@@ -136,14 +188,14 @@ fn default_patch_does_not_apply_the_global_rpath_to_packages() {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        rpaths.push(rpath_entries(&patchelf, &binaries[0]));
+        rpaths.push(recorded_rpaths(project.path(), PACKAGE));
     }
 
     let (default, only_packages) = (&rpaths[0], &rpaths[1]);
     assert_eq!(
         default,
         only_packages,
-        "`uv nix patch` applied a different RPATH than `--only-packages`:\n\
+        "`uv nix patch` recorded different library paths than `--only-packages`:\n\
          default ({} entries): {default:#?}\n\
          --only-packages ({} entries): {only_packages:#?}",
         default.len(),
