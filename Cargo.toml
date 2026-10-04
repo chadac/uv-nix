@@ -8,6 +8,12 @@ anyhow = { version = "1" }
 console = { version = "0.16", default-features = false, features = ["std"] }
 rayon = { version = "1" }
 owo-colors = { version = "4" }
+# PEP 440 version parsing/matching for Python `requires-python` / `.python-version`.
+# This is astral's published PEP 440 engine — the same code uv vendors as
+# `uv_pep440` — so versions are interpreted exactly as uv interprets them. A
+# crates.io dep (not uv's in-tree `uv-pep440`) because this crate must also
+# compile standalone at the repo root, where a uv workspace dep can't resolve.
+pep440_rs = { version = "0.7.3" }
 semver = { version = "1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
@@ -40,5 +46,5 @@ name = "source_build"
 path = "tests/source_build.rs"
 
 [[test]]
-name = "python_patch"
-path = "tests/python_patch.rs"
+name = "nixpkgs_python"
+path = "tests/nixpkgs_python.rs"

@@ -1,3 +1,16 @@
+Resolve Python from nix instead of downloading a bundled CPython.
+
+uv provisions interpreters by downloading a prebuilt CPython into a
+machine-global cache (~/.local/share/uv/python) shared by every project on
+the host. Running those under nix requires patchelf-ing them in place, which
+mutates state this project does not own -- and the old hook did it on every
+*use*, not just install, so merely resolving an interpreter rewrote it.
+
+This hooks the one choke point in find_or_download: when discovery finds
+nothing, ask uv-nix for nix-provided candidates and let uv validate them
+via PythonRequest::satisfied. The download path is left unreachable by
+05-uv-python-nix-only.patch.
+
 diff --git a/crates/uv-python/Cargo.toml b/crates/uv-python/Cargo.toml
 index 2273163..5393314 100644
 --- a/crates/uv-python/Cargo.toml
@@ -11,29 +24,36 @@ index 2273163..5393314 100644
  
  anyhow = { workspace = true }
 diff --git a/crates/uv-python/src/installation.rs b/crates/uv-python/src/installation.rs
-index 8223649..f9695a8 100644
+index 8223649..41cf5e1 100644
 --- a/crates/uv-python/src/installation.rs
 +++ b/crates/uv-python/src/installation.rs
-@@ -197,6 +197,12 @@ impl PythonInstallation {
- 
-         let err = match Self::find_existing(request, environments, preference, arch, cache) {
-             Ok(installation) => {
-+                // Ensure managed Python is patched for Nix on first use.
-+                if installation.is_managed() {
-+                    uv_nix::post_python_install_patch(
-+                        installation.interpreter().sys_base_prefix(),
-+                    );
-+                }
-                 installation
-                     .download_and_warn_if_outdated_prerelease(
-                         request,
-@@ -379,6 +385,9 @@ impl PythonInstallation {
-             e.warn_user(&installed);
+@@ -219,6 +219,29 @@ impl PythonInstallation {
+             _ => return Err(err),
          }
  
-+        // Patch ELF binaries and install ctypes hook for NixOS compatibility.
-+        uv_nix::post_python_install_patch(installed.path());
++        // Source the interpreter from nix instead of downloading one of uv's
++        // prebuilt CPythons. Those live in a machine-global cache shared with
++        // every other project on the host, and would have to be patched in
++        // place to run under nix. uv validates each candidate itself, so the
++        // request semantics stay uv's.
++        let canonical_request = request.to_canonical_string();
++        for candidate in uv_nix::nix_python_candidates(Some(canonical_request.as_ref())) {
++            match Interpreter::query(&candidate, cache) {
++                Ok(interpreter) if request.satisfied(&interpreter, cache) => {
++                    debug!("Using nix-provided Python at {}", candidate.display());
++                    return Ok(Self::new(PythonSource::ProvidedPath, interpreter));
++                }
++                Ok(_) => debug!(
++                    "Nix Python at {} does not satisfy {request}",
++                    candidate.display()
++                ),
++                Err(err) => debug!(
++                    "Failed to query nix Python at {}: {err}",
++                    candidate.display()
++                ),
++            }
++        }
 +
-         Ok(Self {
-             source: PythonSource::Managed,
-             interpreter: Interpreter::query(installed.executable(false), cache)?,
+         // If we can't convert the request to a download, throw the original error
+         let Some(download_request) = PythonDownloadRequest::from_request(request) else {
+             return Err(err);

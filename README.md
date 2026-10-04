@@ -65,6 +65,48 @@ can be done with:
 uv nix gen -o venv.nix
 ```
 
+### Python interpreter selection
+
+uv-nix always sources Python from **nix** — the `python3` from your
+flake/devenv shell, or a `pythonXY` resolved from your nixpkgs. It never
+downloads or uses one of uv's own prebuilt ("managed") CPython builds.
+
+This differs from stock uv, which defaults to
+`python-preference = managed` and downloads a CPython into a
+machine-global cache (`~/.local/share/uv/python`). Running those under Nix
+means patching them in place with patchelf — mutating a directory shared
+with every other project on the host. uv-nix refuses to do that, so nix is
+the only interpreter source.
+
+When nothing on `PATH` satisfies the request, the interpreter is resolved
+from your nixpkgs in this order:
+
+1. the `pythonXY` matching a bare `.python-version` pin (`3.12` →
+   `python312`);
+2. nixpkgs' own default `python3`, if it satisfies the constraint;
+3. otherwise the newest `pythonXY` below that default which does satisfy
+   it — so `requires-python = "==3.12.*"` works without a pin.
+
+Candidate versions are read with `nix eval`, so narrowing the search
+doesn't build interpreters it then discards.
+
+If nixpkgs has no Python matching your `requires-python`, resolution
+**fails with an error** rather than silently falling back to a bundled
+build or a different patch version. Relax the constraint, or pin nixpkgs
+to a revision that has the version you need.
+
+To restore uv's stock behaviour, the usual knobs all work:
+
+```bash
+uv --python-preference managed venv     # per invocation
+UV_PYTHON_PREFERENCE=managed uv venv    # per environment
+```
+
+```toml
+# uv.toml / pyproject.toml [tool.uv]
+python-preference = "managed"
+```
+
 ## Configuration
 
 ### pyproject.toml

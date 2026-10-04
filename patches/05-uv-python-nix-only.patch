@@ -1,0 +1,32 @@
+Make nix-provided Python the only interpreter source by default.
+
+uv ships `python-preference = managed`, which prefers its own prebuilt
+CPython in a machine-global cache (~/.local/share/uv/python). Making those
+work under nix means patchelf-ing them in place, mutating state shared with
+every other project on the host. uv-nix resolves interpreters from nix
+instead (see the hook in 03-uv-python-nix-hook.patch), so uv itself must
+never select or download one.
+
+User overrides (--python-preference, UV_PYTHON_PREFERENCE, uv.toml) still
+win: settings.rs resolves them via unwrap_or_default().
+
+diff --git a/crates/uv-python/src/discovery.rs b/crates/uv-python/src/discovery.rs
+index 1a027b2..7f06239 100644
+--- a/crates/uv-python/src/discovery.rs
++++ b/crates/uv-python/src/discovery.rs
+@@ -114,7 +114,6 @@ impl serde::Serialize for PythonRequest {
+ pub enum PythonPreference {
+     /// Only use managed Python installations; never use system Python installations.
+     OnlyManaged,
+-    #[default]
+     /// Prefer managed Python installations over system Python installations.
+     ///
+     /// System Python installations are still preferred over downloading managed Python versions.
+@@ -124,6 +123,7 @@ pub enum PythonPreference {
+     ///
+     /// If a system Python installation cannot be found, a managed Python installation can be used.
+     System,
++    #[default]
+     /// Only use system Python installations; never use managed Python installations.
+     OnlySystem,
+ }
