@@ -48,3 +48,7 @@ path = "tests/source_build.rs"
 [[test]]
 name = "nixpkgs_python"
 path = "tests/nixpkgs_python.rs"
+
+[[test]]
+name = "nix_patch"
+path = "tests/nix_patch.rs"
