@@ -83,7 +83,7 @@ check:
 # =============================================================================
 
 # Run the default test set (wheel installs + nixpkgs Python preference)
-test: test-wheel test-nixpkgs-python test-nix-patch
+test: test-wheel test-nixpkgs-python test-nix-patch test-ctypes-hook
 
 # Run wheel install tests
 test-wheel: build
@@ -96,6 +96,10 @@ test-nixpkgs-python: build
 # Run `uv nix patch` e2e tests (venv patching, not install-time patching)
 test-nix-patch: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test nix_patch -- --test-threads=2
+
+# Run ctypes-hook e2e tests (find_library against nix libraries)
+test-ctypes-hook: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test ctypes_hook -- --test-threads=2
 
 # Run source build tests (slow)
 test-source: build
@@ -140,7 +144,7 @@ test-nix-gen-heavy: build
     UV_BIN="$(pwd)/uv/target/debug/uv" bash tests/nix-gen/test-nix-gen-heavy.sh
 
 # Run all test suites
-test-all: test-wheel test-nixpkgs-python test-nix-patch test-source test-docker test-nix-gen test-nix-gen-heavy
+test-all: test-wheel test-nixpkgs-python test-nix-patch test-ctypes-hook test-source test-docker test-nix-gen test-nix-gen-heavy
 
 # Clear test venv cache
 test-clean:
