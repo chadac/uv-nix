@@ -10,13 +10,183 @@
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use anyhow::Context;
 use owo_colors::OwoColorize;
 use serde::Serialize;
 use tracing::{debug, warn};
 
 use crate::build_env::{EffectivePackageConfig, get_effective_package_config};
 use crate::patchelf::{self, PatchConfig};
+
+/// Root of the nix store. Paths under it are immutable and shared host-wide.
+const NIX_STORE: &str = "/nix/store";
+
+/// Whether a venv's interpreter is nix-provided.
+///
+/// Resolves symlinks: `bin/python3` is a link, and what matters is the
+/// interpreter it actually points at.
+fn is_nix_provided(python: &Path) -> bool {
+    std::fs::canonicalize(python).is_ok_and(|real| real.starts_with(NIX_STORE))
+}
+
+/// Rebuild a venv on a nixpkgs interpreter, restoring what was installed.
+///
+/// Destructive, so it needs consent: `--recreate`, or a prompt when attached
+/// to a terminal. The reinstall runs through this same uv binary, whose
+/// install hook applies the per-binary library fixes.
+fn rebuild_on_nix_python<O: Write, E: Write>(
+    out: &mut CliOutput<'_, O, E>,
+    venv_path: &Path,
+    python_path: &Path,
+    assume_yes: bool,
+) -> anyhow::Result<()> {
+    let current = std::fs::canonicalize(python_path).unwrap_or_else(|_| python_path.to_path_buf());
+    let project_dir = venv_path.parent().unwrap_or(venv_path).to_path_buf();
+
+    let Some(nix_python) = crate::python_provider::candidates(None, &project_dir)
+        .into_iter()
+        .next()
+    else {
+        anyhow::bail!(
+            "{} is built on {}, which is not nix-provided, and nixpkgs offers no \
+             replacement interpreter for this project",
+            venv_path.display(),
+            current.display()
+        );
+    };
+
+    let _ = writeln!(
+        out.stderr,
+        "{}",
+        format!(
+            "Interpreter is not nix-provided: {}\n  \
+             Rebuilding {} on {}",
+            current.display(),
+            venv_path.display(),
+            nix_python.display()
+        )
+        .dimmed()
+    );
+
+    // Defaults to "no": `confirm` returns the default when stderr is not a
+    // terminal, and nothing destructive should happen unasked in a script.
+    if !assume_yes && !crate::confirm("Recreate the environment and reinstall it?", false) {
+        anyhow::bail!(
+            "declined; nothing was changed. Re-run with --recreate, or use \
+             --only-packages to patch the installed packages in place"
+        );
+    }
+
+    // Capture the installed distributions before the venv goes away. A project
+    // is restored from its manifest instead: that reproduces extras, sources
+    // and editable installs, which a flat requirements list cannot.
+    let restore = RestorePlan::capture(&project_dir, venv_path, python_path)?;
+
+    let uv = std::env::current_exe().context("cannot locate the running uv binary")?;
+    run_uv(
+        &uv,
+        &project_dir,
+        &[
+            "venv".as_ref(),
+            "--clear".as_ref(),
+            "--python".as_ref(),
+            nix_python.as_os_str(),
+            venv_path.as_os_str(),
+        ],
+    )?;
+
+    restore.apply(&uv, &project_dir, venv_path)
+}
+
+/// How to put a rebuilt venv's packages back.
+enum RestorePlan {
+    /// The venv is a project's own `.venv`: `uv sync` from the manifest.
+    Sync,
+    /// Anything else: reinstall the distributions that were installed.
+    Requirements(PathBuf),
+    /// Nothing was installed.
+    Empty,
+}
+
+impl RestorePlan {
+    fn capture(
+        project_dir: &Path,
+        venv_path: &Path,
+        python_path: &Path,
+    ) -> anyhow::Result<RestorePlan> {
+        // `uv sync` only ever manages the project's default `.venv`, so it is
+        // the wrong tool for a venv living anywhere else.
+        if project_dir.join("pyproject.toml").is_file() && venv_path == project_dir.join(".venv") {
+            return Ok(RestorePlan::Sync);
+        }
+
+        let uv = std::env::current_exe().context("cannot locate the running uv binary")?;
+        let output = Command::new(&uv)
+            .current_dir(project_dir)
+            .args(["pip", "freeze", "--python"])
+            .arg(python_path)
+            .output()
+            .context("failed to list the installed packages")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "could not list the packages installed in {}: {}",
+                venv_path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let frozen = String::from_utf8_lossy(&output.stdout);
+        let frozen = frozen.trim();
+        if frozen.is_empty() {
+            return Ok(RestorePlan::Empty);
+        }
+
+        let path =
+            std::env::temp_dir().join(format!("uv-nix-reinstall-{}.txt", std::process::id()));
+        std::fs::write(&path, format!("{frozen}\n"))
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        Ok(RestorePlan::Requirements(path))
+    }
+
+    fn apply(self, uv: &Path, project_dir: &Path, venv_path: &Path) -> anyhow::Result<()> {
+        match self {
+            RestorePlan::Sync => run_uv(uv, project_dir, &["sync".as_ref()]),
+            RestorePlan::Requirements(path) => {
+                let result = run_uv(
+                    uv,
+                    project_dir,
+                    &[
+                        "pip".as_ref(),
+                        "install".as_ref(),
+                        "--python".as_ref(),
+                        venv_path.join("bin/python3").as_os_str(),
+                        "-r".as_ref(),
+                        path.as_os_str(),
+                    ],
+                );
+                let _ = std::fs::remove_file(&path);
+                result
+            }
+            RestorePlan::Empty => Ok(()),
+        }
+    }
+}
+
+/// Run this uv binary, surfacing its stderr on failure.
+fn run_uv(uv: &Path, cwd: &Path, args: &[&std::ffi::OsStr]) -> anyhow::Result<()> {
+    debug!("Running {} {:?}", uv.display(), args);
+    let status = Command::new(uv)
+        .current_dir(cwd)
+        .args(args)
+        .status()
+        .with_context(|| format!("failed to run {} {args:?}", uv.display()))?;
+    if !status.success() {
+        anyhow::bail!("{} {args:?} failed", uv.display());
+    }
+    Ok(())
+}
 
 /// Output streams for CLI commands, matching uv's Printer pattern.
 pub struct CliOutput<'a, O: Write, E: Write> {
@@ -31,7 +201,7 @@ pub struct CliOutput<'a, O: Write, E: Write> {
 pub struct PatchOptions {
     /// Path to the virtual environment.
     pub path: PathBuf,
-    /// Only patch the Python interpreter.
+    /// Only fix the interpreter, not the installed packages.
     pub only_python: bool,
     /// Only patch installed packages.
     pub only_packages: bool,
@@ -43,6 +213,8 @@ pub struct PatchOptions {
     pub interpreter: Option<PathBuf>,
     /// Additional RPATH entries.
     pub rpath: Option<String>,
+    /// Rebuild a venv whose interpreter is not nix-provided without asking.
+    pub recreate: bool,
 }
 
 /// Options for the `uv nix info` command.
@@ -148,7 +320,6 @@ pub struct VenvNixInfo {
     /// Resolved nixpkgs source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nixpkgs: Option<NixpkgsInfo>,
-    /// Whether the Python interpreter is patched.
     /// Python interpreter path.
     pub python_path: PathBuf,
     /// RPATH entries on Python interpreter.
@@ -175,42 +346,24 @@ pub fn nix_patch<O: Write, E: Write>(
 
     // Validate it's a venv
     let python_path = find_python_binary(&venv_path)?;
+
+    // Interpreters are never patched. A venv's `bin/python3` is a symlink to
+    // an interpreter the project does not own, so patching it writes through
+    // the venv into the nix store or into a Python installation shared with
+    // everything else on the host. The fix for a non-nix interpreter is to
+    // rebuild the venv on a nix one. Why: PR #81.
+    //
+    // Runs before the venv layout is read: rebuilding can land on a different
+    // minor version, which moves site-packages.
+    if !opts.only_packages && !is_nix_provided(&python_path) {
+        rebuild_on_nix_python(out, &venv_path, &python_path, opts.recreate)?;
+    }
+
     let site_packages = find_site_packages(&venv_path)?;
 
     let config = PatchConfig::from_overrides(opts.patchelf, opts.interpreter, opts.rpath);
 
     let mut patched_count = 0;
-
-    // Patch Python interpreter
-    if !opts.only_packages {
-        let _ = writeln!(out.stderr, "{}", "Patching Python interpreter...".dimmed());
-        match patchelf::patch_binary(&python_path, &config) {
-            Ok(()) => {
-                patched_count += 1;
-                debug!("Patched Python binary: {}", python_path.display());
-            }
-            Err(e) => {
-                warn!("Failed to patch Python binary: {}", e);
-            }
-        }
-
-        // Also patch libpython if it exists
-        let lib_dir = python_path
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("lib"))
-            .unwrap_or_default();
-        if lib_dir.exists() {
-            let libpython_binaries = patchelf::find_native_binaries(&lib_dir, config.is_darwin);
-            for bin in libpython_binaries {
-                if let Err(e) = patchelf::patch_binary(&bin, &config) {
-                    debug!("Failed to patch {}: {}", bin.display(), e);
-                } else {
-                    patched_count += 1;
-                }
-            }
-        }
-    }
 
     // Patch packages
     if !opts.only_python {
@@ -763,5 +916,58 @@ fn print_info_text<W: Write>(out: &mut W, info: &VenvNixInfo, verbose: bool) {
             "{}",
             "Not patched yet. Run `uv nix patch` to patch this environment.".yellow()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_nix_provided;
+
+    /// A real file outside the store is not nix-provided — a system, pyenv or
+    /// uv-managed interpreter, which must be replaced rather than patched.
+    #[test]
+    fn local_interpreter_is_not_nix_provided() {
+        let dir = tempfile::tempdir().unwrap();
+        let python = dir.path().join("python3");
+        std::fs::write(&python, b"\x7fELF").unwrap();
+
+        assert!(!is_nix_provided(&python));
+    }
+
+    /// The check must resolve symlinks: a venv's `bin/python3` is a link, and
+    /// what matters is the interpreter it points at.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_into_the_store_is_nix_provided() {
+        use std::os::unix::fs::symlink;
+
+        // Any store path will do; this one is the running test binary's.
+        let Ok(store_entry) = std::fs::read_dir("/nix/store") else {
+            eprintln!("skipping: no /nix/store on this machine");
+            return;
+        };
+        let Some(target) = store_entry
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.join("bin").is_dir())
+        else {
+            eprintln!("skipping: no store path with a bin/ directory");
+            return;
+        };
+
+        let venv = tempfile::tempdir().unwrap();
+        let python = venv.path().join("python3");
+        symlink(&target, &python).unwrap();
+
+        assert!(is_nix_provided(&python));
+    }
+
+    /// A dangling interpreter can't be shown to be nix-provided, so it falls
+    /// to the rebuild path rather than being assumed fine.
+    #[test]
+    fn unresolvable_interpreter_is_not_nix_provided() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert!(!is_nix_provided(&dir.path().join("bin/python3")));
     }
 }

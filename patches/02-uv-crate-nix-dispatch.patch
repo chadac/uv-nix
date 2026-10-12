@@ -63,7 +63,7 @@ index fa5c142..ac8ff78 100644
  };
  use uv_client::BaseClientBuilder;
  use uv_flags::EnvironmentFlags;
-@@ -1438,6 +1439,54 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
+@@ -1438,6 +1439,55 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
              ))
              .await
          }
@@ -78,6 +78,7 @@ index fa5c142..ac8ff78 100644
 +                path: args.path,
 +                only_python: args.only_python,
 +                only_packages: args.only_packages,
++                recreate: args.recreate,
 +                packages: args.packages,
 +                patchelf: args.patchelf,
 +                interpreter: args.interpreter,
