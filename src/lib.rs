@@ -212,14 +212,14 @@ pub fn post_install_patch(
 
     // Install ctypes hook for runtime-libs (dlopen/ctypes packages) even if
     // there are no native binaries — pure Python packages may need it.
-    let runtime_lib_paths = collect_runtime_lib_paths(installed_packages, &rpath_by_attr);
-    if !runtime_lib_paths.is_empty() {
+    let hook_lib_paths = collect_hook_lib_paths(installed_packages, &rpath_by_attr);
+    if !hook_lib_paths.is_empty() {
         // Ensure store paths are realized — `nix eval` computes paths but
         // doesn't download/build them. Without this, the ctypes hook would
         // reference paths that don't exist on non-NixOS systems.
-        realize_store_paths(&runtime_lib_paths);
+        realize_store_paths(&hook_lib_paths);
 
-        if let Err(err) = ctypes_hook::install_ctypes_hook(site_packages, &runtime_lib_paths) {
+        if let Err(err) = ctypes_hook::install_ctypes_hook(site_packages, &hook_lib_paths) {
             debug!("Failed to install ctypes hook: {err}");
         }
     }
@@ -365,6 +365,43 @@ fn realize_store_paths(lib_paths: &[PathBuf]) {
 /// Looks up each installed package in package-build-libs.json, finds any
 /// `runtime-libs` entries, and resolves them to Nix store paths via the
 /// rpath_by_attr map.
+/// Library directories the ctypes hook should search.
+///
+/// Every library the venv's binaries can link against, not just the ones
+/// declared as `runtime-libs`: `find_library`/`dlopen` lookups come from pure
+/// Python too, and a user who lists `extra-libraries` expects those resolvable
+/// by name. Scoping this to `runtime-libs` meant only the two packages that
+/// declare it (matplotlib, pysodium) ever got a hook at all, so an explicit
+/// `extra-libraries = ["file"]` could not satisfy `python-magic`.
+///
+/// Realizing these costs nothing in practice: the default set is the nix
+/// interpreter's own closure, already present because the venv runs on it.
+///
+/// Why: PR #82.
+fn collect_hook_lib_paths(
+    installed_packages: &[String],
+    rpath_by_attr: &std::collections::HashMap<String, PathBuf>,
+) -> Vec<PathBuf> {
+    let mut paths = collect_runtime_lib_paths(installed_packages, rpath_by_attr);
+    let mut seen: std::collections::HashSet<PathBuf> = paths.iter().cloned().collect();
+
+    // Sorted: `rpath_by_attr` is a HashMap, and `_uv_nix_libs.conf` should not
+    // change contents between runs that resolved the same libraries.
+    let mut rest: Vec<PathBuf> = rpath_by_attr
+        .values()
+        .filter(|path| !seen.contains(*path))
+        .cloned()
+        .collect();
+    rest.sort();
+    for path in rest {
+        if seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+
+    paths
+}
+
 fn collect_runtime_lib_paths(
     installed_packages: &[String],
     rpath_by_attr: &std::collections::HashMap<String, PathBuf>,

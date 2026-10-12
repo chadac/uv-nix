@@ -52,3 +52,7 @@ path = "tests/nixpkgs_python.rs"
 [[test]]
 name = "nix_patch"
 path = "tests/nix_patch.rs"
+
+[[test]]
+name = "ctypes_hook"
+path = "tests/ctypes_hook.rs"
