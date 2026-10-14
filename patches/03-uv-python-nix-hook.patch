@@ -8,26 +8,26 @@ mutates state this project does not own -- and the old hook did it on every
 
 This hooks the one choke point in find_or_download: when discovery finds
 nothing, ask uv-nix for nix-provided candidates and let uv validate them
-via PythonRequest::satisfied. The download path is left unreachable by
+via Interpreter::matches_request. The download path is left unreachable by
 05-uv-python-nix-only.patch.
 
-diff --git a/crates/uv-python/Cargo.toml b/crates/uv-python/Cargo.toml
-index 2273163..5393314 100644
---- a/crates/uv-python/Cargo.toml
-+++ b/crates/uv-python/Cargo.toml
-@@ -37,6 +37,7 @@ uv-redacted = { workspace = true }
- uv-state = { workspace = true }
- uv-static = { workspace = true }
- uv-trampoline-builder = { workspace = true }
+diff --git a/crates/uv-python-discovery/Cargo.toml b/crates/uv-python-discovery/Cargo.toml
+index c522a03..2f910f6 100644
+--- a/crates/uv-python-discovery/Cargo.toml
++++ b/crates/uv-python-discovery/Cargo.toml
+@@ -27,6 +27,7 @@ uv-errors = { workspace = true }
+ uv-fs = { workspace = true }
+ uv-pep440 = { workspace = true }
+ uv-platform = { workspace = true }
 +uv-nix = { workspace = true }
- uv-warnings = { workspace = true }
- 
- anyhow = { workspace = true }
-diff --git a/crates/uv-python/src/installation.rs b/crates/uv-python/src/installation.rs
-index 8223649..41cf5e1 100644
---- a/crates/uv-python/src/installation.rs
-+++ b/crates/uv-python/src/installation.rs
-@@ -219,6 +219,29 @@ impl PythonInstallation {
+ uv-python-interpreter = { workspace = true }
+ uv-python-managed = { workspace = true }
+ uv-python-types = { workspace = true }
+diff --git a/crates/uv-python-discovery/src/installation.rs b/crates/uv-python-discovery/src/installation.rs
+index 2fa85a6..f7a7fc5 100644
+--- a/crates/uv-python-discovery/src/installation.rs
++++ b/crates/uv-python-discovery/src/installation.rs
+@@ -209,6 +209,29 @@ impl PythonInstallation {
              _ => return Err(err),
          }
  
@@ -39,7 +39,7 @@ index 8223649..41cf5e1 100644
 +        let canonical_request = request.to_canonical_string();
 +        for candidate in uv_nix::nix_python_candidates(Some(canonical_request.as_ref())) {
 +            match Interpreter::query(&candidate, cache) {
-+                Ok(interpreter) if request.satisfied(&interpreter, cache) => {
++                Ok(interpreter) if interpreter.matches_request(request, cache) => {
 +                    debug!("Using nix-provided Python at {}", candidate.display());
 +                    return Ok(Self::new(PythonSource::ProvidedPath, interpreter));
 +                }
