@@ -60,6 +60,7 @@ let
       "${uvNixSrc}/patches/02-uv-crate-nix-dispatch.patch"
       "${uvNixSrc}/patches/03-uv-python-nix-hook.patch"
       "${uvNixSrc}/patches/04-uv-dispatch-nix-build-env.patch"
+      "${uvNixSrc}/patches/05-uv-python-nix-only.patch"
     ];
 
     # Replace uv's Cargo.lock with the pre-generated one that includes uv-nix.
