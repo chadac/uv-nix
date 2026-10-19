@@ -1,0 +1,32 @@
+name: Smoke test
+
+# Runs the vended binary the way a user does: a bare `nix run` of this flake
+# on fresh runners. No checkout, cachix, or dev shell, so store paths left
+# over from building uv can't mask missing runtime deps.
+#
+# Release pushes to bin use a PAT, so they trigger this too.
+
+on:
+  push:
+    branches: [bin]
+  pull_request:
+    branches: [bin]
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    env:
+      FLAKE: github:${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: cachix/install-nix-action@v31
+
+      - name: uv --version
+        run: nix run "$FLAKE" -- --version
+
+      - name: uv run python
+        working-directory: ${{ runner.temp }}
+        run: nix run "$FLAKE" -- run python -c "import sys; print(sys.executable)"
