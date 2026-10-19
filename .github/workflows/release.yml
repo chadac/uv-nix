@@ -47,6 +47,8 @@ jobs:
 
   release:
     needs: [build]
+    outputs:
+      bin_sha: ${{ steps.bin.outputs.sha }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -114,6 +116,7 @@ jobs:
           generate_release_notes: true
 
       - name: Update bin branch
+        id: bin
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
@@ -179,5 +182,12 @@ jobs:
           git add releases/ default.nix
           git commit -m "release: ${TAG}"
           git push origin bin
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.UV_NIX_PAT }}
+
+  smoke-test:
+    needs: [release]
+    uses: ./.github/workflows/bin-smoke.yml
+    with:
+      ref: ${{ needs.release.outputs.bin_sha }}

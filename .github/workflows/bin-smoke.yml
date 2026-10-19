@@ -1,0 +1,44 @@
+name: Bin smoke test
+
+# Runs the vended binary the way a user does: bare `nix run` against the bin
+# flake on a fresh runner. No checkout, cachix, or dev shell, so CI-built store
+# paths can't mask missing runtime deps.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref (branch or commit) of the bin flake to test'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (branch or commit) of the bin flake to test'
+        required: false
+        default: 'bin'
+        type: string
+  pull_request:
+    paths: ['.github/workflows/bin-smoke.yml']
+  schedule:
+    # Catch nixpkgs drift breaking the bin flake between releases.
+    - cron: '0 6 * * 1'
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    env:
+      FLAKE: github:${{ github.repository }}/${{ inputs.ref || 'bin' }}
+    steps:
+      - uses: cachix/install-nix-action@v31
+
+      - name: uv --version
+        run: nix run "$FLAKE" -- --version
+
+      - name: uv run python
+        working-directory: ${{ runner.temp }}
+        run: nix run "$FLAKE" -- run python -c "import sys; print(sys.executable)"
