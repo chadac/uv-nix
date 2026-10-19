@@ -1,8 +1,12 @@
 name: Smoke test
 
-# Runs the vended binary the way a user does: a bare `nix run` of this flake
-# on fresh runners. No checkout, cachix, or dev shell, so store paths left
-# over from building uv can't mask missing runtime deps.
+# Runs every vended release the way a user does: a bare `nix run` of this
+# flake on fresh runners. No checkout, cachix, or dev shell, so store paths
+# left over from building uv can't mask missing runtime deps.
+#
+# The matrix covers every package the flake exposes on each system, so a
+# nixpkgs bump that breaks linking for old releases shows up here. Releases
+# that can no longer be made to work should be dropped from ./releases.
 #
 # Release pushes to bin use a PAT, so they trigger this too.
 
@@ -12,21 +16,51 @@ on:
   pull_request:
     branches: [bin]
 
+env:
+  FLAKE: github:${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.gen.outputs.include }}
+    steps:
+      - uses: cachix/install-nix-action@v31
+
+      - name: List packages per system
+        id: gen
+        run: |
+          include=$(nix eval --json "$FLAKE#packages" --apply '
+            pkgs:
+              let
+                runners = {
+                  x86_64-linux = "ubuntu-latest";
+                  aarch64-linux = "ubuntu-24.04-arm";
+                  aarch64-darwin = "macos-latest";
+                };
+              in
+                builtins.concatMap (system:
+                  map (attr: { inherit system attr; runner = runners.${system}; })
+                    (builtins.attrNames pkgs.${system}))
+                  (builtins.attrNames runners)
+          ')
+          echo "$include" | jq -r '.[] | "\(.system)\t\(.attr)"'
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+
   smoke:
+    needs: [matrix]
+    name: ${{ matrix.attr }} (${{ matrix.system }})
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        include: ${{ fromJSON(needs.matrix.outputs.include) }}
     runs-on: ${{ matrix.runner }}
-    env:
-      FLAKE: github:${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: cachix/install-nix-action@v31
 
       - name: uv --version
-        run: nix run "$FLAKE" -- --version
+        run: nix run "$FLAKE#${{ matrix.attr }}" -- --version
 
       - name: uv run python
         working-directory: ${{ runner.temp }}
-        run: nix run "$FLAKE" -- run python -c "import sys; print(sys.executable)"
+        run: nix run "$FLAKE#${{ matrix.attr }}" -- run python -c "import sys; print(sys.executable)"
