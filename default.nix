@@ -60,12 +60,35 @@ else pkgs.stdenv.mkDerivation {
 
   nativeBuildInputs = lib.optionals pkgs.stdenv.isLinux [
     pkgs.autoPatchelfHook
+  ] ++ lib.optionals pkgs.stdenv.isDarwin [
+    pkgs.cctools
+    pkgs.darwin.autoSignDarwinBinariesHook
   ];
 
   installPhase = ''
     runHook preInstall
     install -Dm755 $src $out/bin/uv
     runHook postInstall
+  '';
+
+  # The release binary's load commands point at the CI runner's /nix/store
+  # (e.g. jemalloc, libiconv); repoint each at the same-named dylib from
+  # buildInputs. Must run before fixup so autoSignDarwinBinariesHook re-signs.
+  postInstall = lib.optionalString pkgs.stdenv.isDarwin ''
+    IFS=: read -ra libDirs <<< ${lib.escapeShellArg (lib.makeLibraryPath buildInputs)}
+    for old in $(otool -L $out/bin/uv | awk 'NR > 1 && $1 ~ "^/nix/store/" { print $1 }'); do
+      name=$(basename "$old")
+      new=
+      for dir in "''${libDirs[@]}"; do
+        if [ -e "$dir/$name" ]; then new="$dir/$name"; break; fi
+      done
+      if [ -z "$new" ]; then
+        echo "uv-nix-bin: no buildInput provides $name (needed as $old)" >&2
+        exit 1
+      fi
+      echo "uv-nix-bin: $old -> $new"
+      install_name_tool -change "$old" "$new" $out/bin/uv
+    done
   '';
 
   meta = {
