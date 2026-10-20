@@ -1,5 +1,5 @@
 diff --git a/crates/uv-install-operations/Cargo.toml b/crates/uv-install-operations/Cargo.toml
-index 9947d03..f373186 100644
+index 2c7ebbf..357075f 100644
 --- a/crates/uv-install-operations/Cargo.toml
 +++ b/crates/uv-install-operations/Cargo.toml
 @@ -28,6 +28,7 @@ uv-errors = { workspace = true }
@@ -11,7 +11,7 @@ index 9947d03..f373186 100644
  uv-pep440 = { workspace = true }
  uv-pep508 = { workspace = true }
 diff --git a/crates/uv-install-operations/src/lib.rs b/crates/uv-install-operations/src/lib.rs
-index 18dc50e..1b026d8 100644
+index 18305e0..9100019 100644
 --- a/crates/uv-install-operations/src/lib.rs
 +++ b/crates/uv-install-operations/src/lib.rs
 @@ -786,6 +786,17 @@ async fn execute_plan(
@@ -33,7 +33,7 @@ index 18dc50e..1b026d8 100644
      }
  
 diff --git a/crates/uv-python-commands/Cargo.toml b/crates/uv-python-commands/Cargo.toml
-index 78a8694..03e8d4d 100644
+index e258dcc..81c3dc5 100644
 --- a/crates/uv-python-commands/Cargo.toml
 +++ b/crates/uv-python-commands/Cargo.toml
 @@ -27,6 +27,7 @@ uv-configuration = { workspace = true }
@@ -45,10 +45,10 @@ index 78a8694..03e8d4d 100644
  uv-platform = { workspace = true }
  uv-platform-tags = { workspace = true }
 diff --git a/crates/uv-python-commands/src/install.rs b/crates/uv-python-commands/src/install.rs
-index a062398..5ca41a0 100644
+index 9a5c388..c8aadf3 100644
 --- a/crates/uv-python-commands/src/install.rs
 +++ b/crates/uv-python-commands/src/install.rs
-@@ -675,6 +675,9 @@ async fn perform_install(
+@@ -674,6 +674,9 @@ async fn perform_install(
          if let Err(e) = installation.ensure_dylib_patched() {
              e.warn_user(installation);
          }
@@ -57,9 +57,9 @@ index a062398..5ca41a0 100644
 +        uv_nix::warn_bundled_python_unsupported();
  
          let upgradeable = (default || is_default_install)
-             || requested_minor_versions.contains(&installation.key().version().python_version());
+             || requested_minor_versions
 diff --git a/crates/uv/Cargo.toml b/crates/uv/Cargo.toml
-index dc1c6f7..a713315 100644
+index 2200631..6ef131f 100644
 --- a/crates/uv/Cargo.toml
 +++ b/crates/uv/Cargo.toml
 @@ -42,6 +42,7 @@ uv-installer = { workspace = true }

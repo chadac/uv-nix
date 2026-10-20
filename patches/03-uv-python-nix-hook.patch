@@ -12,11 +12,11 @@ via Interpreter::matches_request. The download path is left unreachable by
 05-uv-python-nix-only.patch.
 
 diff --git a/crates/uv-python-discovery/Cargo.toml b/crates/uv-python-discovery/Cargo.toml
-index c522a03..2f910f6 100644
+index b3e2283..7368c2f 100644
 --- a/crates/uv-python-discovery/Cargo.toml
 +++ b/crates/uv-python-discovery/Cargo.toml
-@@ -27,6 +27,7 @@ uv-errors = { workspace = true }
- uv-fs = { workspace = true }
+@@ -28,6 +28,7 @@ uv-fs = { workspace = true }
+ uv-macros = { workspace = true }
  uv-pep440 = { workspace = true }
  uv-platform = { workspace = true }
 +uv-nix = { workspace = true }
@@ -24,7 +24,7 @@ index c522a03..2f910f6 100644
  uv-python-managed = { workspace = true }
  uv-python-types = { workspace = true }
 diff --git a/crates/uv-python-discovery/src/installation.rs b/crates/uv-python-discovery/src/installation.rs
-index 2fa85a6..f7a7fc5 100644
+index c4d7138..7876bd0 100644
 --- a/crates/uv-python-discovery/src/installation.rs
 +++ b/crates/uv-python-discovery/src/installation.rs
 @@ -209,6 +209,29 @@ impl PythonInstallation {
