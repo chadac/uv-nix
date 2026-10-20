@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -165,6 +166,106 @@ pub fn post_install_patch(
     site_packages: &Path,
     installed_packages: &[String],
 ) -> anyhow::Result<()> {
+    patch_installed(site_packages, installed_packages)?;
+    mark_processed(site_packages, installed_packages);
+    Ok(())
+}
+
+/// Patch every distribution in `site_packages` that uv-nix hasn't processed yet.
+///
+/// [`post_install_patch`] only sees the wheels uv installs in the current
+/// operation. Anything that was already in the environment is skipped,
+/// including packages installed by a stock uv, by a uv-nix build that predates
+/// this check, or by a run that failed partway through patching. uv's no-op
+/// fast path (`Checked N packages`) also never reaches the install step. Call
+/// this after every sync, no-op or not, to catch those packages.
+///
+/// The check is a single `read_dir` of site-packages compared against
+/// `<venv>/share/uv-nix/processed.json`, so a fully patched environment costs
+/// almost nothing. Re-processing an already patched package is harmless:
+/// binaries whose rpath (or Mach-O references) already point at `/nix/store`
+/// are skipped.
+pub fn reconcile_venv(site_packages: &Path) -> anyhow::Result<()> {
+    let processed = load_processed(site_packages);
+    let pending: Vec<String> = list_dist_prefixes(site_packages)
+        .into_iter()
+        .filter(|prefix| !processed.contains(prefix))
+        .collect();
+
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    debug!(
+        "uv-nix: {} distribution(s) in {} not yet patched",
+        pending.len(),
+        site_packages.display()
+    );
+    post_install_patch(site_packages, &pending)
+}
+
+/// `<venv>` for a `<venv>/lib/pythonX.Y/site-packages` directory.
+fn venv_root(site_packages: &Path) -> &Path {
+    site_packages
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .unwrap_or(site_packages)
+}
+
+fn processed_path(site_packages: &Path) -> PathBuf {
+    venv_root(site_packages)
+        .join("share")
+        .join("uv-nix")
+        .join("processed.json")
+}
+
+/// Dist-info prefixes (e.g. `numpy-2.4.6`) present in `site_packages`.
+fn list_dist_prefixes(site_packages: &Path) -> BTreeSet<String> {
+    let Ok(entries) = fs::read_dir(site_packages) else {
+        return BTreeSet::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            name.strip_suffix(".dist-info").map(str::to_string)
+        })
+        .collect()
+}
+
+fn load_processed(site_packages: &Path) -> BTreeSet<String> {
+    fs::read_to_string(processed_path(site_packages))
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+/// Record `prefixes` as patched. Entries for distributions that are no longer
+/// installed are dropped so the file tracks the environment.
+fn mark_processed(site_packages: &Path, prefixes: &[String]) {
+    if prefixes.is_empty() {
+        return;
+    }
+    let present = list_dist_prefixes(site_packages);
+    let mut processed = load_processed(site_packages);
+    processed.extend(prefixes.iter().cloned());
+    processed.retain(|prefix| present.contains(prefix));
+
+    let path = processed_path(site_packages);
+    let result = (|| -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, serde_json::to_string_pretty(&processed)?)?;
+        Ok(())
+    })();
+    if let Err(err) = result {
+        debug!("Failed to write {}: {err}", path.display());
+    }
+}
+
+fn patch_installed(site_packages: &Path, installed_packages: &[String]) -> anyhow::Result<()> {
     use std::time::Instant;
 
     if installed_packages.is_empty() {
@@ -178,6 +279,13 @@ pub fn post_install_patch(
     let t0 = Instant::now();
     let nix = nix_config::require();
     let patch_config = patchelf::PatchConfig::from_env();
+
+    // Without the patcher every binary would be skipped one by one. Fail
+    // instead, so the caller warns and the packages aren't marked processed
+    // (a later reconcile then retries them).
+    if !patch_config.patcher.exists() {
+        anyhow::bail!("patcher {} does not exist", patch_config.patcher.display());
+    }
 
     // Resolve extra libraries from [tool.uv-nix] in pyproject.toml
     let mut rpath_by_attr = nix.rpath_map.clone();

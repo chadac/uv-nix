@@ -1,0 +1,124 @@
+Patch already-present but unpatched packages on every sync, not just new installs.
+
+The per-wheel hook from 02-uv-crate-nix-dispatch.patch only runs inside
+execute_plan, for the wheels installed in that run. Every "nothing to do"
+path skips it: the sync fast path (finish_noop), the empty-plan branch in
+InstallationPlan::execute, `uv pip install` when requirements are already
+satisfied, ephemeral environments that are already fresh, and reused tool
+environments. So a package that was installed by a stock uv, by an older
+uv-nix, or by an interrupted run stayed unpatched until someone ran
+`uv nix patch` by hand.
+
+nix_reconcile calls uv_nix::reconcile_venv on each of those paths. It is a
+single read_dir compared against <venv>/share/uv-nix/processed.json, so a
+fully patched environment pays almost nothing.
+
+diff --git a/crates/uv-environment-operations/src/lib.rs b/crates/uv-environment-operations/src/lib.rs
+index 7a899d5..2556270 100644
+--- a/crates/uv-environment-operations/src/lib.rs
++++ b/crates/uv-environment-operations/src/lib.rs
+@@ -1862,6 +1862,7 @@ pub async fn update_environment(
+                             .join(" | ")
+                     );
+                 }
++                uv_install_operations::nix_reconcile(&venv);
+                 return Ok(EnvironmentUpdate {
+                     environment: venv,
+                     changelog: Changelog::default(),
+diff --git a/crates/uv-environment-operations/src/sync.rs b/crates/uv-environment-operations/src/sync.rs
+index 93369b3..8489a99 100644
+--- a/crates/uv-environment-operations/src/sync.rs
++++ b/crates/uv-environment-operations/src/sync.rs
+@@ -257,6 +257,10 @@ pub async fn sync_from_lock(
+         )
+         .await?;
+ 
++        if !dry_run.enabled() {
++            uv_install_operations::nix_reconcile(venv);
++        }
++
+         return Ok(installation_plan.finish_noop(
+             &resolution,
+             modifications,
+diff --git a/crates/uv-install-operations/src/lib.rs b/crates/uv-install-operations/src/lib.rs
+index 1b026d8..7d8676d 100644
+--- a/crates/uv-install-operations/src/lib.rs
++++ b/crates/uv-install-operations/src/lib.rs
+@@ -205,6 +205,22 @@ impl Changelog {
+     }
+ }
+ 
++
++/// uv-nix: patch anything in `venv` that hasn't been patched yet.
++///
++/// The per-wheel hook in [`execute_plan`] only sees the wheels installed in
++/// this run. This also covers packages that were already present but never
++/// patched, and it has to run on the no-op paths, which skip the install step.
++pub fn nix_reconcile(venv: &PythonEnvironment) {
++    for site_packages_dir in venv.site_packages() {
++        if let Err(err) = uv_nix::reconcile_venv(&site_packages_dir) {
++            warn_user!(
++                "Failed to patch native binaries in `{}` for Nix: {err}",
++                site_packages_dir.user_display()
++            );
++        }
++    }
++}
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum BytecodeCompilation {
+     /// Compile all Python source files in the environment.
+@@ -436,6 +452,7 @@ impl InstallationPlan {
+             && extraneous.is_empty()
+             && compile.is_none()
+         {
++            nix_reconcile(venv);
+             logger.on_check(resolution.len(), start, printer, dry_run)?;
+             return Ok(Changelog::default());
+         }
+@@ -512,6 +529,8 @@ impl InstallationPlan {
+             uninstalls.extend(shared_uninstalls);
+         }
+ 
++        nix_reconcile(venv);
++
+         if let Some(compile) = compile {
+             match compile {
+                 BytecodeCompilation::All => {
+diff --git a/crates/uv-pip-commands/src/install.rs b/crates/uv-pip-commands/src/install.rs
+index 5510e45..a0ef5f9 100644
+--- a/crates/uv-pip-commands/src/install.rs
++++ b/crates/uv-pip-commands/src/install.rs
+@@ -371,6 +371,9 @@ pub async fn pip_install(
+                         debug!("Requirement satisfied: {requirement}");
+                     }
+                 }
++                if !dry_run.enabled() {
++                    uv_install_operations::nix_reconcile(&environment);
++                }
+                 DefaultInstallLogger.on_check(requirements.len(), start, printer, dry_run)?;
+ 
+                 if strict && !dry_run.enabled() {
+diff --git a/crates/uv-tool-commands/src/install.rs b/crates/uv-tool-commands/src/install.rs
+index 8547b66..f2763a1 100644
+--- a/crates/uv-tool-commands/src/install.rs
++++ b/crates/uv-tool-commands/src/install.rs
+@@ -651,6 +651,7 @@ pub async fn install(
+                     Ok(SatisfiesResult::Fresh { .. })
+                 );
+                 if already_installed {
++                    uv_install_operations::nix_reconcile(environment.environment());
+                     // Then we're done! Though we might need to update the receipt.
+                     if *tool_receipt.options() != options {
+                         installed_tools.add_tool_receipt(
+diff --git a/crates/uv-tool-commands/src/run.rs b/crates/uv-tool-commands/src/run.rs
+index c8e453a..bb63abc 100644
+--- a/crates/uv-tool-commands/src/run.rs
++++ b/crates/uv-tool-commands/src/run.rs
+@@ -1157,6 +1157,7 @@ async fn get_or_create_environment(
+                         ),
+                         Ok(SatisfiesResult::Fresh { .. })
+                     ) {
++                        uv_install_operations::nix_reconcile(environment.environment());
+                         debug!("Using existing tool `{}`", requirement.name);
+                         return Ok((from, environment.into_environment()));
+                     }
