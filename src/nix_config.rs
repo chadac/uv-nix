@@ -406,12 +406,68 @@ in {{
     let json_str = String::from_utf8(output.stdout)?;
     let config: NixConfig = serde_json::from_str(json_str.trim())?;
 
+    realize_tools(&config)?;
+
     debug!("Resolved NixConfig: {:?}", config);
     Ok(config)
+}
+
+/// `/nix/store/<hash>-<name>` for a path inside the Nix store.
+fn store_root(path: &Path) -> Option<PathBuf> {
+    let rest = path.strip_prefix("/nix/store").ok()?;
+    let first = rest.components().next()?;
+    Some(Path::new("/nix/store").join(first))
+}
+
+/// Make sure the tools uv-nix runs are actually present in the Nix store.
+///
+/// `nix eval` only computes store paths; it doesn't build or download
+/// anything. On a machine whose store doesn't already contain this nixpkgs'
+/// patchelf, every patch attempt would otherwise fail and binaries would be
+/// left unpatched without any visible error.
+fn realize_tools(config: &NixConfig) -> anyhow::Result<()> {
+    let mut roots: BTreeSet<PathBuf> = BTreeSet::new();
+    roots.extend(store_root(&config.patcher));
+    if !config.is_darwin {
+        roots.extend(store_root(&config.interpreter));
+    }
+    roots.retain(|root| !root.exists());
+    if roots.is_empty() {
+        return Ok(());
+    }
+
+    debug!("Realizing {} missing tool store path(s)", roots.len());
+    let output = std::process::Command::new("nix-store")
+        .arg("--realise")
+        .args(&roots)
+        .stdout(std::process::Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("nix-store --realise failed: {}", stderr.trim());
+    }
+    if !config.patcher.exists() {
+        anyhow::bail!("{} is missing after realisation", config.patcher.display());
+    }
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_store_root() {
+        assert_eq!(
+            store_root(Path::new("/nix/store/abc-patchelf-0.19/bin/patchelf")),
+            Some(PathBuf::from("/nix/store/abc-patchelf-0.19"))
+        );
+        assert_eq!(
+            store_root(Path::new("/nix/store/abc-glibc/lib/ld-linux-x86-64.so.2")),
+            Some(PathBuf::from("/nix/store/abc-glibc"))
+        );
+        assert_eq!(store_root(Path::new("/usr/bin/patchelf")), None);
+        assert_eq!(store_root(Path::new("")), None);
+    }
 
     #[test]
     fn test_compute_cache_key_deterministic() {

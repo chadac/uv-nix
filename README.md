@@ -49,13 +49,18 @@ nix profile install github:chadac/uv-nix/bin
 You shouldn't need to change your workflow at all -- this will
 integrate with your flake and uv project without any interference.
 
-If you are importing this into an existing project, you can run:
+Every command that syncs an environment (`uv sync`, `uv run`, `uv add`,
+`uv pip install`, `uv tool install`, ...) patches native binaries
+automatically. That includes packages that were already in the venv
+before uv-nix saw them, such as a venv created by a stock `uv`: the next
+sync patches them even if there is nothing new to install. uv-nix tracks
+which distributions it has handled in `.venv/share/uv-nix/processed.json`.
+
+To force a full re-patch of an existing venv, run:
 
 ```bash
 uv nix patch
 ```
-
-To recreate your venv with the patched Python binary and versions.
 
 It is also possible to generate a `uv2nix` derivation, which should
 include a slightly more reliable set of build inputs when needed. This

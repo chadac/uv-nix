@@ -82,8 +82,8 @@ check:
 # Test commands
 # =============================================================================
 
-# Run the default test set (wheel installs + nixpkgs Python preference)
-test: test-wheel test-nixpkgs-python
+# Run the default test set (wheel installs + nixpkgs Python preference + patch reconcile)
+test: test-wheel test-nixpkgs-python test-reconcile
 
 # Run wheel install tests
 test-wheel: build
@@ -92,6 +92,10 @@ test-wheel: build
 # Run nixpkgs-Python e2e tests (nix Python must win over uv's bundled builds)
 test-nixpkgs-python: build
     UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test nixpkgs_python -- --test-threads=4
+
+# Run patch-reconcile e2e tests (no-op syncs must still patch the venv)
+test-reconcile: build
+    UV_BIN="$(pwd)/uv/target/debug/uv" cargo test --test reconcile -- --test-threads=2
 
 # Run source build tests (slow)
 test-source: build
