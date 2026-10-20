@@ -5,15 +5,15 @@
   assets = {
     "x86_64-linux" = {
       url = "https://github.com/chadac/uv-nix/releases/download/0.13.1/uv-nix-0.13.1-linux-x86_64";
-      hash = "sha256-7AamP4DxCQUlfSNPK8+NRkBOFHDeXiV12Q9OAp4TxU8=";
+      hash = "sha256-6BtcMEfamlS0mmAx63rCtYj19fl9GnhsF2JRBPD8s8U=";
     };
     "aarch64-linux" = {
       url = "https://github.com/chadac/uv-nix/releases/download/0.13.1/uv-nix-0.13.1-linux-aarch64";
-      hash = "sha256-HqKS90Qkwx5+IeQCuFMJ7wVOYppokynrmjEY/DJKO54=";
+      hash = "sha256-NkOVct1WU55RmAuXUSQzEQqkRAqjvFXfdYwfwLTMVps=";
     };
     "aarch64-darwin" = {
       url = "https://github.com/chadac/uv-nix/releases/download/0.13.1/uv-nix-0.13.1-darwin-arm64";
-      hash = "sha256-/L0YwH2cmjtodrh7w0Lsviy4HJeP3QZvMfS/DCoC9vk=";
+      hash = "sha256-8QCkEPClBQyxgi8CtZBkH26Lo1zfgcj+ftJO9q+K0jE=";
     };
   };
 }
