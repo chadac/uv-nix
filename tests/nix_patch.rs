@@ -203,13 +203,22 @@ fn default_patch_does_not_apply_the_global_rpath_to_packages() {
     );
 }
 
-/// Replace the venv's interpreter symlink with a real copy of the binary.
+/// Point the venv's interpreter at a real copy of the binary kept *outside*
+/// the venv, and return the path of that copy.
 ///
 /// This is the shape of a venv built on a Python that is not nix-provided —
 /// a system or pyenv install, or uv's managed cache — without needing one on
 /// the test machine. `pyvenv.cfg` still points `home` at the real prefix, so
 /// the environment keeps working; only the interpreter uv would patch moves
 /// out of the store.
+///
+/// The copy lives outside the venv deliberately. `uv venv --clear` recreates
+/// `bin/python3`, normally as a symlink into the store, so a copy left at
+/// that path would be replaced by a perfectly good interpreter — and a later
+/// "was it edited in place?" read of that path would follow the new symlink
+/// and compare against a different binary rather than the copy. Kept
+/// somewhere `--clear` cannot reach, the copy is either untouched or
+/// demonstrably rewritten, which is the thing worth asserting.
 fn delocate_interpreter(venv: &Path) -> PathBuf {
     let python = venv.join("bin/python3");
     let real = std::fs::canonicalize(&python).expect("venv has no interpreter");
@@ -218,6 +227,21 @@ fn delocate_interpreter(venv: &Path) -> PathBuf {
         "expected a store interpreter to start from, got {}",
         real.display()
     );
+
+    let outside = venv
+        .parent()
+        .expect("the venv has no parent directory")
+        .join("external-python/bin");
+    std::fs::create_dir_all(&outside).expect("failed to create the external interpreter directory");
+    let external = outside.join("python3");
+    std::fs::copy(&real, &external).expect("failed to copy the interpreter out of the store");
+    let mut perms = std::fs::metadata(&external).unwrap().permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+    }
+    std::fs::set_permissions(&external, perms).unwrap();
 
     for name in [
         "python",
@@ -231,15 +255,10 @@ fn delocate_interpreter(venv: &Path) -> PathBuf {
             std::fs::remove_file(&link).ok();
         }
     }
-    std::fs::copy(&real, &python).expect("failed to copy the interpreter into the venv");
-    let mut perms = std::fs::metadata(&python).unwrap().permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        perms.set_mode(0o755);
-    }
-    std::fs::set_permissions(&python, perms).unwrap();
-    python
+    std::os::unix::fs::symlink(&external, &python)
+        .expect("failed to point the venv at the external interpreter");
+
+    external
 }
 
 /// A venv already on a nixpkgs interpreter needs no rebuild, and the store
@@ -308,17 +327,16 @@ fn non_nix_interpreter_is_replaced_not_patched() {
         rebuilt.display()
     );
 
-    // ...and the interpreter that was there was not rewritten. `uv venv
-    // --clear` removes it, so either it is gone or it is unchanged; what must
-    // never happen is patchelf having edited it in place.
-    if let Ok(after) = std::fs::read(&delocated) {
-        assert_eq!(
-            before,
-            after,
-            "the non-nix interpreter at {} was patched in place",
-            delocated.display()
-        );
-    }
+    // ...and the interpreter it was on was not rewritten. It sits outside the
+    // venv, so the rebuild cannot have replaced it: it is still the same file,
+    // and what must never happen is patchelf having edited it in place.
+    let after = std::fs::read(&delocated).expect("the external interpreter is gone");
+    assert_eq!(
+        before,
+        after,
+        "the non-nix interpreter at {} was patched in place",
+        delocated.display()
+    );
 
     // The packages came back.
     let output = Command::new(UV_BIN.as_path())
