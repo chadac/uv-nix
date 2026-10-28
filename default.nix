@@ -5,7 +5,7 @@
 #   Pinned:  import ./default.nix { inherit pkgs; release = ./releases/v0.10.9-nix.1.nix; }
 {
   pkgs,
-  release ? ./releases/0.13.5-nix.1.nix,
+  release ? ./releases/0.13.6-nix.1.nix,
 }:
 
 let
