@@ -318,9 +318,29 @@ fn patch_installed(site_packages: &Path, installed_packages: &[String]) -> anyho
     let find_ms = t1.elapsed().as_millis();
     let n_binaries: usize = pkg_binaries.iter().map(|p| p.binaries.len()).sum();
 
+    // Stage 3: Plan targeted patches via soname analysis
+    let t2 = Instant::now();
+    let planned = (n_binaries > 0).then(|| {
+        soname::plan_patches(
+            site_packages,
+            &pkg_binaries,
+            &nix.patcher,
+            patch_config.is_darwin,
+            &rpath_by_attr,
+            &nixpkgs_rev,
+        )
+    });
+    let linked: Vec<PathBuf> = match &planned {
+        Some(Ok((plans, _))) => plans
+            .iter()
+            .flat_map(|p| p.rpaths.iter().cloned())
+            .collect(),
+        _ => Vec::new(),
+    };
+
     // Install ctypes hook for runtime-libs (dlopen/ctypes packages) even if
     // there are no native binaries — pure Python packages may need it.
-    let hook_lib_paths = collect_hook_lib_paths(installed_packages, &rpath_by_attr);
+    let hook_lib_paths = collect_hook_lib_paths(installed_packages, &rpath_by_attr, &linked);
     if !hook_lib_paths.is_empty() {
         // Ensure store paths are realized — `nix eval` computes paths but
         // doesn't download/build them. Without this, the ctypes hook would
@@ -332,7 +352,7 @@ fn patch_installed(site_packages: &Path, installed_packages: &[String]) -> anyho
         }
     }
 
-    if n_binaries == 0 {
+    let Some(planned) = planned else {
         if timing {
             let total_ms = t_total.elapsed().as_millis();
             eprintln!(
@@ -341,7 +361,7 @@ fn patch_installed(site_packages: &Path, installed_packages: &[String]) -> anyho
             );
         }
         return Ok(());
-    }
+    };
 
     debug!(
         "Patching {} binaries from {} packages in {}",
@@ -350,16 +370,7 @@ fn patch_installed(site_packages: &Path, installed_packages: &[String]) -> anyho
         site_packages.display()
     );
 
-    // Stage 3: Plan targeted patches via soname analysis
-    let t2 = Instant::now();
-    let (plans, manifest) = match soname::plan_patches(
-        site_packages,
-        &pkg_binaries,
-        &nix.patcher,
-        patch_config.is_darwin,
-        &rpath_by_attr,
-        &nixpkgs_rev,
-    ) {
+    let (plans, manifest) = match planned {
         Ok(result) => result,
         Err(err) => {
             // Soname resolution failed — fall back to global rpath patching
@@ -473,34 +484,37 @@ fn realize_store_paths(lib_paths: &[PathBuf]) {
 /// Looks up each installed package in package-build-libs.json, finds any
 /// `runtime-libs` entries, and resolves them to Nix store paths via the
 /// rpath_by_attr map.
-/// Library directories the ctypes hook should search.
-///
-/// Every library the venv's binaries can link against, not just the ones
-/// declared as `runtime-libs`: `find_library`/`dlopen` lookups come from pure
-/// Python too, and a user who lists `extra-libraries` expects those resolvable
-/// by name. Scoping this to `runtime-libs` meant only the two packages that
-/// declare it (matplotlib, pysodium) ever got a hook at all, so an explicit
-/// `extra-libraries = ["file"]` could not satisfy `python-magic`.
-///
-/// Realizing these costs nothing in practice: the default set is the nix
-/// interpreter's own closure, already present because the venv runs on it.
-///
-/// Why: PR #82.
+/// The venv's own library dirs for the ctypes hook; each gets realized.
 fn collect_hook_lib_paths(
     installed_packages: &[String],
     rpath_by_attr: &std::collections::HashMap<String, PathBuf>,
+    linked: &[PathBuf],
 ) -> Vec<PathBuf> {
     let mut paths = collect_runtime_lib_paths(installed_packages, rpath_by_attr);
     let mut seen: std::collections::HashSet<PathBuf> = paths.iter().cloned().collect();
 
-    // Sorted: `rpath_by_attr` is a HashMap, and `_uv_nix_libs.conf` should not
-    // change contents between runs that resolved the same libraries.
-    let mut rest: Vec<PathBuf> = rpath_by_attr
-        .values()
-        .filter(|path| !seen.contains(*path))
-        .cloned()
+    let mut attrs: BTreeSet<String> = nix_config::collect_all_lib_attrs()
+        .map(|(runtime, _)| runtime.into_iter().collect())
+        .unwrap_or_default();
+    attrs.extend(installed_lib_attrs(installed_packages));
+    attrs.extend(
+        rpath_by_attr
+            .keys()
+            .filter(|k| k.starts_with("_extra_"))
+            .cloned(),
+    );
+
+    // Sorted, so `_uv_nix_libs.conf` is stable across runs.
+    let mut rest: BTreeSet<PathBuf> = attrs
+        .iter()
+        .filter_map(|attr| rpath_by_attr.get(attr).cloned())
         .collect();
-    rest.sort();
+    rest.extend(
+        linked
+            .iter()
+            .filter(|p| p.starts_with("/nix/store"))
+            .cloned(),
+    );
     for path in rest {
         if seen.insert(path.clone()) {
             paths.push(path);
@@ -508,6 +522,28 @@ fn collect_hook_lib_paths(
     }
 
     paths
+}
+
+/// `libs` (plus this platform's) declared for each installed package.
+fn installed_lib_attrs(installed_packages: &[String]) -> Vec<String> {
+    let package_map: std::collections::HashMap<String, nix_config::PackageBuildEntry> =
+        match serde_json::from_str(nix_config::PACKAGE_BUILD_LIBS_JSON) {
+            Ok(m) => m,
+            Err(_) => return Vec::new(),
+        };
+    let darwin = cfg!(target_os = "macos");
+    installed_packages
+        .iter()
+        .filter_map(|prefix| package_map.get(&parse_dist_prefix(prefix).0))
+        .flat_map(|entry| {
+            let platform = if darwin {
+                &entry.libs_darwin
+            } else {
+                &entry.libs_linux
+            };
+            entry.libs.iter().chain(platform).cloned()
+        })
+        .collect()
 }
 
 fn collect_runtime_lib_paths(
@@ -726,4 +762,48 @@ pub fn nix_python_candidates(request: Option<&str>) -> Vec<PathBuf> {
     }
 
     candidates
+}
+
+#[cfg(test)]
+mod hook_lib_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn lib(name: &str) -> PathBuf {
+        PathBuf::from(format!("/nix/store/0000-{name}/lib"))
+    }
+
+    fn rpaths() -> HashMap<String, PathBuf> {
+        ["zlib", "gdal", "mpi", "libpng", "fontconfig", "file"]
+            .into_iter()
+            .map(|a| (a.to_string(), lib(a)))
+            .chain([("_extra_0".to_string(), lib("file"))])
+            .collect()
+    }
+
+    #[test]
+    fn hook_libs_skip_libraries_no_installed_package_declares() {
+        let paths = collect_hook_lib_paths(&["requests-2.32.3".into()], &rpaths(), &[]);
+        assert!(
+            paths.contains(&lib("zlib")),
+            "interpreter default: {paths:?}"
+        );
+        assert!(paths.contains(&lib("file")), "extra-libraries: {paths:?}");
+        assert!(!paths.contains(&lib("gdal")), "undeclared: {paths:?}");
+        assert!(!paths.contains(&lib("mpi")), "undeclared: {paths:?}");
+    }
+
+    #[test]
+    fn hook_libs_cover_installed_packages_and_linked_binaries() {
+        let paths =
+            collect_hook_lib_paths(&["matplotlib-3.10.0".into()], &rpaths(), &[lib("gdal")]);
+        assert_eq!(
+            paths.first(),
+            Some(&lib("fontconfig")),
+            "runtime-libs first"
+        );
+        assert!(paths.contains(&lib("libpng")), "declared libs: {paths:?}");
+        assert!(paths.contains(&lib("gdal")), "linked: {paths:?}");
+        assert!(!paths.contains(&lib("mpi")), "undeclared: {paths:?}");
+    }
 }
