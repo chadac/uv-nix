@@ -17,9 +17,14 @@ pub enum NixpkgsSource {
     DevenvLock { rev: String },
     /// From a .flox/env/manifest.lock file (pinned rev).
     FloxLock { rev: String },
+    /// The machine-wide default flake ref from `UV_NIX_NIXPKGS`.
+    EnvDefault { flake_ref: String },
     /// Auto-resolved from latest nixpkgs-unstable (written to pyproject.toml).
     AutoResolved { rev: String },
 }
+
+/// Env var naming the nixpkgs flake ref for unpinned projects.
+pub const NIXPKGS_ENV: &str = "UV_NIX_NIXPKGS";
 
 /// Resolve the nixpkgs source for a given project directory and config.
 ///
@@ -27,8 +32,19 @@ pub enum NixpkgsSource {
 /// 1. `[tool.uv-nix].nixpkgs` — explicit flake ref, always wins
 /// 2. `[tool.uv-nix].use` — go directly to that source (error if not found)
 /// 3. Auto-detect chain: flake.lock → devenv.lock → .flox/env/manifest.lock
-/// 4. Auto-resolve latest nixpkgs-unstable + pin to pyproject.toml
+/// 4. `UV_NIX_NIXPKGS` — a machine-wide flake ref, e.g. `nixpkgs`
+/// 5. Auto-resolve latest nixpkgs-unstable + pin to pyproject.toml
 pub fn resolve_nixpkgs(project_dir: &Path, config: &UvNixConfig) -> NixpkgsSource {
+    let env_default = std::env::var(NIXPKGS_ENV).ok().filter(|v| !v.is_empty());
+    resolve_nixpkgs_with_default(project_dir, config, env_default)
+}
+
+/// `resolve_nixpkgs` with the env value injected, for tests.
+fn resolve_nixpkgs_with_default(
+    project_dir: &Path,
+    config: &UvNixConfig,
+    env_default: Option<String>,
+) -> NixpkgsSource {
     // 1. Explicit pin in pyproject.toml
     if let Some(ref flake_ref) = config.nixpkgs {
         debug!("Using nixpkgs from pyproject.toml: {flake_ref}");
@@ -48,7 +64,13 @@ pub fn resolve_nixpkgs(project_dir: &Path, config: &UvNixConfig) -> NixpkgsSourc
         return source;
     }
 
-    // 4. Auto-resolve latest nixpkgs-unstable and pin to pyproject.toml
+    // 4. A machine-wide default: no fetch, no generated flake
+    if let Some(flake_ref) = env_default {
+        debug!("Using nixpkgs from {NIXPKGS_ENV}: {flake_ref}");
+        return NixpkgsSource::EnvDefault { flake_ref };
+    }
+
+    // 5. Auto-resolve latest nixpkgs-unstable and pin to pyproject.toml
     debug!("No nixpkgs pin found, auto-resolving from nixpkgs-unstable");
     match auto_resolve_nixpkgs(project_dir) {
         Some(rev) => {
@@ -363,7 +385,7 @@ pub fn nixpkgs_import_expr(source: &NixpkgsSource) -> String {
                 "import (builtins.fetchTree {{ type = \"github\"; owner = \"NixOS\"; repo = \"nixpkgs\"; rev = \"{rev}\"; }}) {{ system = \"{system}\"; }}"
             )
         }
-        NixpkgsSource::ExplicitPin { flake_ref } => {
+        NixpkgsSource::ExplicitPin { flake_ref } | NixpkgsSource::EnvDefault { flake_ref } => {
             format!("(builtins.getFlake \"{flake_ref}\").legacyPackages.\"{system}\"")
         }
     }
@@ -371,13 +393,17 @@ pub fn nixpkgs_import_expr(source: &NixpkgsSource) -> String {
 
 /// Whether the given source requires `--impure` for nix evaluation.
 pub fn requires_impure(source: &NixpkgsSource) -> bool {
-    matches!(source, NixpkgsSource::ExplicitPin { .. })
+    matches!(
+        source,
+        NixpkgsSource::ExplicitPin { .. } | NixpkgsSource::EnvDefault { .. }
+    )
 }
 
 /// Get a stable identifier for the nixpkgs source (used as cache key component).
 pub fn nixpkgs_cache_key(source: &NixpkgsSource) -> String {
     match source {
         NixpkgsSource::ExplicitPin { flake_ref } => format!("explicit:{flake_ref}"),
+        NixpkgsSource::EnvDefault { flake_ref } => format!("env:{flake_ref}"),
         NixpkgsSource::FlakeLock { rev } => format!("flake-lock:{rev}"),
         NixpkgsSource::DevenvLock { rev } => format!("devenv-lock:{rev}"),
         NixpkgsSource::FloxLock { rev } => format!("flox-lock:{rev}"),
@@ -1098,6 +1124,55 @@ mod tests {
             NixpkgsSource::FlakeLock { rev } => assert_eq!(rev, "detected-rev"),
             other => panic!("Expected FlakeLock, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_env_default_skips_flake_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = UvNixConfig::default();
+        let source = resolve_nixpkgs_with_default(dir.path(), &config, Some("nixpkgs".to_string()));
+        match source {
+            NixpkgsSource::EnvDefault { flake_ref } => assert_eq!(flake_ref, "nixpkgs"),
+            other => panic!("Expected EnvDefault, got {other:?}"),
+        }
+        assert!(!dir.path().join("flake.nix").exists());
+        assert!(!dir.path().join("flake.lock").exists());
+    }
+
+    #[test]
+    fn test_resolve_nixpkgs_project_lock_beats_env_default() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("flake.lock"),
+            r#"{
+  "nodes": {
+    "nixpkgs": {
+      "locked": { "owner": "NixOS", "repo": "nixpkgs", "rev": "project-rev", "type": "github" }
+    },
+    "root": { "inputs": { "nixpkgs": "nixpkgs" } }
+  },
+  "root": "root",
+  "version": 7
+}"#,
+        )
+        .unwrap();
+
+        let config = UvNixConfig::default();
+        let source = resolve_nixpkgs_with_default(dir.path(), &config, Some("nixpkgs".to_string()));
+        match source {
+            NixpkgsSource::FlakeLock { rev } => assert_eq!(rev, "project-rev"),
+            other => panic!("Expected FlakeLock, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_env_default_imports_via_get_flake() {
+        let source = NixpkgsSource::EnvDefault {
+            flake_ref: "nixpkgs".to_string(),
+        };
+        assert!(nixpkgs_import_expr(&source).starts_with("(builtins.getFlake \"nixpkgs\")"));
+        assert!(requires_impure(&source));
+        assert_eq!(nixpkgs_cache_key(&source), "env:nixpkgs");
     }
 
     #[test]

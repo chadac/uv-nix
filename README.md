@@ -175,7 +175,11 @@ it auto-detects from your project's lock files in this order:
 2. `devenv.lock` — same format as flake.lock
 3. `.flox/env/manifest.lock` — Flox manifest lock
 
-If none of these are found, uv-nix generates a minimal `flake.nix`
+If none of these are found and `UV_NIX_NIXPKGS` is set, uv-nix uses that
+flake ref (e.g. `nixpkgs`, to follow your flake registry) and writes nothing
+to your project. This suits machines that already carry a pinned nixpkgs.
+
+Otherwise, uv-nix generates a minimal `flake.nix`
 and `flake.lock` in your project to pin `nixpkgs-unstable`. This
 ensures reproducible builds — you can update the pin later with
 `nix flake update`.
