@@ -627,6 +627,9 @@ fn resolve_nixpkgs_info(start: &Path) -> Option<NixpkgsInfo> {
             "pyproject.toml [tool.uv-nix].nixpkgs".to_string(),
             flake_ref.clone(),
         ),
+        nixpkgs::NixpkgsSource::EnvDefault { flake_ref } => {
+            (nixpkgs::NIXPKGS_ENV.to_string(), flake_ref.clone())
+        }
         nixpkgs::NixpkgsSource::FlakeLock { rev } => ("flake.lock".to_string(), rev.clone()),
         nixpkgs::NixpkgsSource::DevenvLock { rev } => ("devenv.lock".to_string(), rev.clone()),
         nixpkgs::NixpkgsSource::FloxLock { rev } => {
