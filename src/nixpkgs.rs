@@ -248,14 +248,7 @@ fn auto_resolve_nixpkgs(project_dir: &Path) -> Option<String> {
     // Nix won't see untracked files in a git repo — stage flake.nix first
     git_stage(project_dir, "flake.nix");
 
-    // Run `nix flake lock` to generate flake.lock
-    let output = crate::nix_command()
-        .arg("flake")
-        .arg("lock")
-        .arg(project_dir)
-        .output();
-
-    match output {
+    match lock_flake_alone(flake_content, &lock_path) {
         Ok(out) if out.status.success() => {
             debug!("Generated flake.lock via nix flake lock");
             match parse_flake_lock(&lock_path) {
@@ -281,6 +274,30 @@ fn auto_resolve_nixpkgs(project_dir: &Path) -> Option<String> {
             resolve_latest_nixpkgs_rev()
         }
     }
+}
+
+/// Locks the flake alone; locking the project copies it all.
+fn lock_flake_alone(
+    flake_content: &str,
+    lock_path: &Path,
+) -> std::io::Result<std::process::Output> {
+    let dir = std::env::temp_dir().join(format!("uv-nix-lock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let result = (|| {
+        std::fs::write(dir.join("flake.nix"), flake_content)?;
+        let out = crate::nix_command()
+            .arg("flake")
+            .arg("lock")
+            .arg(format!("path:{}", dir.display()))
+            .output()?;
+        if out.status.success() {
+            std::fs::copy(dir.join("flake.lock"), lock_path)?;
+        }
+        Ok(out)
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
 }
 
 /// Stage a file in git (intent-to-add) so Nix can see it in a git repo.
