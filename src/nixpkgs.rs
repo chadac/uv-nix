@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -19,12 +18,15 @@ pub enum NixpkgsSource {
     FloxLock { rev: String },
     /// The machine-wide default flake ref from `UV_NIX_NIXPKGS`.
     EnvDefault { flake_ref: String },
-    /// Auto-resolved from latest nixpkgs-unstable (written to pyproject.toml).
-    AutoResolved { rev: String },
+    /// The `nixpkgs` entry of the user's flake registry.
+    Registry,
 }
 
 /// Env var naming the nixpkgs flake ref for unpinned projects.
 pub const NIXPKGS_ENV: &str = "UV_NIX_NIXPKGS";
+
+/// Flake ref used when nothing pins nixpkgs.
+pub const REGISTRY_FLAKE_REF: &str = "nixpkgs";
 
 /// Resolve the nixpkgs source for a given project directory and config.
 ///
@@ -33,7 +35,7 @@ pub const NIXPKGS_ENV: &str = "UV_NIX_NIXPKGS";
 /// 2. `[tool.uv-nix].use` — go directly to that source (error if not found)
 /// 3. Auto-detect chain: flake.lock → devenv.lock → .flox/env/manifest.lock
 /// 4. `UV_NIX_NIXPKGS` — a machine-wide flake ref, e.g. `nixpkgs`
-/// 5. Auto-resolve latest nixpkgs-unstable + pin to pyproject.toml
+/// 5. The flake registry's `nixpkgs`
 pub fn resolve_nixpkgs(project_dir: &Path, config: &UvNixConfig) -> NixpkgsSource {
     let env_default = std::env::var(NIXPKGS_ENV).ok().filter(|v| !v.is_empty());
     resolve_nixpkgs_with_default(project_dir, config, env_default)
@@ -70,20 +72,9 @@ fn resolve_nixpkgs_with_default(
         return NixpkgsSource::EnvDefault { flake_ref };
     }
 
-    // 5. Auto-resolve latest nixpkgs-unstable and pin to pyproject.toml
-    debug!("No nixpkgs pin found, auto-resolving from nixpkgs-unstable");
-    match auto_resolve_nixpkgs(project_dir) {
-        Some(rev) => {
-            debug!("Auto-resolved nixpkgs rev: {rev}");
-            NixpkgsSource::AutoResolved { rev }
-        }
-        None => {
-            tracing::warn!("Failed to auto-resolve nixpkgs, using hardcoded fallback");
-            NixpkgsSource::AutoResolved {
-                rev: "nixos-unstable".to_string(),
-            }
-        }
-    }
+    // 5. Follow the user's flake registry
+    debug!("No nixpkgs pin found, using the flake registry's {REGISTRY_FLAKE_REF}");
+    NixpkgsSource::Registry
 }
 
 /// Resolve from a specific source (when `[tool.uv-nix].use` is set).
@@ -109,7 +100,7 @@ fn resolve_from_source(
                         "use = \"flake.lock\" but {} not found or has no nixpkgs input",
                         lock_path.display()
                     );
-                    fallback_auto_resolve(project_dir)
+                    NixpkgsSource::Registry
                 }
             }
         }
@@ -126,7 +117,7 @@ fn resolve_from_source(
                         "use = \"devenv\" but {} not found or has no nixpkgs input",
                         lock_path.display()
                     );
-                    fallback_auto_resolve(project_dir)
+                    NixpkgsSource::Registry
                 }
             }
         }
@@ -143,7 +134,7 @@ fn resolve_from_source(
                         "use = \"flox\" but {} not found or has no nixpkgs rev",
                         lock_path.display()
                     );
-                    fallback_auto_resolve(project_dir)
+                    NixpkgsSource::Registry
                 }
             }
         }
@@ -181,154 +172,6 @@ fn auto_detect(project_dir: &Path, config: &UvNixConfig) -> Option<NixpkgsSource
     }
 
     None
-}
-
-/// Fallback when an explicit `use` source fails to resolve.
-fn fallback_auto_resolve(project_dir: &Path) -> NixpkgsSource {
-    match auto_resolve_nixpkgs(project_dir) {
-        Some(rev) => NixpkgsSource::AutoResolved { rev },
-        None => NixpkgsSource::AutoResolved {
-            rev: "nixos-unstable".to_string(),
-        },
-    }
-}
-
-/// Auto-resolve nixpkgs by generating a flake.nix + flake.lock in the project.
-///
-/// Creates a minimal `flake.nix` with a nixpkgs input, then runs
-/// `nix flake lock` to generate the lock file. On subsequent runs,
-/// the auto-detect chain will find the flake.lock and use its pinned rev.
-fn auto_resolve_nixpkgs(project_dir: &Path) -> Option<String> {
-    let flake_path = project_dir.join("flake.nix");
-    let lock_path = project_dir.join("flake.lock");
-
-    // Don't overwrite existing files
-    if lock_path.exists() || flake_path.exists() {
-        // Fall back to git ls-remote
-        return resolve_latest_nixpkgs_rev();
-    }
-
-    // Prompt user before generating files in their project
-    if !crate::confirm(
-        &format!(
-            "No nixpkgs pin found. Generate flake.nix + flake.lock in {}?",
-            project_dir.display()
-        ),
-        true,
-    ) {
-        crate::status(
-            "Skipped",
-            "flake generation, resolving nixpkgs-unstable via git",
-        );
-        return resolve_latest_nixpkgs_rev();
-    }
-
-    crate::status("Generating", "flake.nix + flake.lock");
-
-    // Write a minimal flake.nix
-    let flake_content = r#"{
-  description = "Python project (generated by uv-nix)";
-
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-  };
-
-  outputs = { nixpkgs, ... }: {
-    # This flake exists to pin nixpkgs for uv-nix.
-    # Run `nix flake update` to update the pin.
-  };
-}
-"#;
-
-    if let Err(err) = std::fs::write(&flake_path, flake_content) {
-        crate::status_warn(&format!("Failed to write flake.nix: {err}"));
-        return resolve_latest_nixpkgs_rev();
-    }
-
-    // Nix won't see untracked files in a git repo — stage flake.nix first
-    git_stage(project_dir, "flake.nix");
-
-    // Run `nix flake lock` to generate flake.lock
-    let output = crate::nix_command()
-        .arg("flake")
-        .arg("lock")
-        .arg(project_dir)
-        .output();
-
-    match output {
-        Ok(out) if out.status.success() => {
-            debug!("Generated flake.lock via nix flake lock");
-            match parse_flake_lock(&lock_path) {
-                Some(rev) => {
-                    crate::status("Pinned", &format!("nixpkgs-unstable ({})", &rev[..12]));
-                    Some(rev)
-                }
-                None => {
-                    crate::status_warn("Generated flake.lock but could not parse nixpkgs rev");
-                    None
-                }
-            }
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            crate::status_warn(&format!("nix flake lock failed: {}", stderr.trim()));
-            cleanup_generated_flake(project_dir, &flake_path);
-            resolve_latest_nixpkgs_rev()
-        }
-        Err(err) => {
-            crate::status_warn(&format!("Failed to run nix flake lock: {err}"));
-            cleanup_generated_flake(project_dir, &flake_path);
-            resolve_latest_nixpkgs_rev()
-        }
-    }
-}
-
-/// Stage a file in git (intent-to-add) so Nix can see it in a git repo.
-fn git_stage(project_dir: &Path, file: &str) {
-    let _ = Command::new("git")
-        .arg("-C")
-        .arg(project_dir)
-        .arg("add")
-        .arg("--intent-to-add")
-        .arg(file)
-        .output();
-}
-
-/// Remove a generated flake.nix and unstage it from git.
-fn cleanup_generated_flake(project_dir: &Path, flake_path: &Path) {
-    let _ = std::fs::remove_file(flake_path);
-    let _ = Command::new("git")
-        .arg("-C")
-        .arg(project_dir)
-        .arg("rm")
-        .arg("--cached")
-        .arg("--quiet")
-        .arg("flake.nix")
-        .output();
-}
-
-/// Resolve the latest commit of nixpkgs-unstable via `git ls-remote`.
-fn resolve_latest_nixpkgs_rev() -> Option<String> {
-    crate::status("Resolving", "nixpkgs-unstable (no lockfile found)");
-    let output = Command::new("git")
-        .arg("ls-remote")
-        .arg("https://github.com/NixOS/nixpkgs")
-        .arg("refs/heads/nixpkgs-unstable")
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    // Format: "<sha>\trefs/heads/nixpkgs-unstable"
-    let rev = stdout.split_whitespace().next()?;
-    if rev.len() >= 40 {
-        Some(rev.to_string())
-    } else {
-        None
-    }
 }
 
 /// Write a nixpkgs pin to pyproject.toml under `[tool.uv-nix]`.
@@ -379,23 +222,29 @@ pub fn nixpkgs_import_expr(source: &NixpkgsSource) -> String {
     match source {
         NixpkgsSource::FlakeLock { rev }
         | NixpkgsSource::DevenvLock { rev }
-        | NixpkgsSource::FloxLock { rev }
-        | NixpkgsSource::AutoResolved { rev } => {
+        | NixpkgsSource::FloxLock { rev } => {
             format!(
                 "import (builtins.fetchTree {{ type = \"github\"; owner = \"NixOS\"; repo = \"nixpkgs\"; rev = \"{rev}\"; }}) {{ system = \"{system}\"; }}"
             )
         }
         NixpkgsSource::ExplicitPin { flake_ref } | NixpkgsSource::EnvDefault { flake_ref } => {
-            format!("(builtins.getFlake \"{flake_ref}\").legacyPackages.\"{system}\"")
+            get_flake_expr(flake_ref, system)
         }
+        NixpkgsSource::Registry => get_flake_expr(REGISTRY_FLAKE_REF, system),
     }
+}
+
+fn get_flake_expr(flake_ref: &str, system: &str) -> String {
+    format!("(builtins.getFlake \"{flake_ref}\").legacyPackages.\"{system}\"")
 }
 
 /// Whether the given source requires `--impure` for nix evaluation.
 pub fn requires_impure(source: &NixpkgsSource) -> bool {
     matches!(
         source,
-        NixpkgsSource::ExplicitPin { .. } | NixpkgsSource::EnvDefault { .. }
+        NixpkgsSource::ExplicitPin { .. }
+            | NixpkgsSource::EnvDefault { .. }
+            | NixpkgsSource::Registry
     )
 }
 
@@ -407,7 +256,7 @@ pub fn nixpkgs_cache_key(source: &NixpkgsSource) -> String {
         NixpkgsSource::FlakeLock { rev } => format!("flake-lock:{rev}"),
         NixpkgsSource::DevenvLock { rev } => format!("devenv-lock:{rev}"),
         NixpkgsSource::FloxLock { rev } => format!("flox-lock:{rev}"),
-        NixpkgsSource::AutoResolved { rev } => format!("auto:{rev}"),
+        NixpkgsSource::Registry => format!("registry:{REGISTRY_FLAKE_REF}"),
     }
 }
 
@@ -1046,11 +895,9 @@ mod tests {
             rev: "abc123".to_string(),
         }));
 
-        let expr = nixpkgs_import_expr(&NixpkgsSource::AutoResolved {
-            rev: "abc456".to_string(),
-        });
-        assert!(expr.contains("abc456"));
-        assert!(expr.contains("fetchTree"));
+        let expr = nixpkgs_import_expr(&NixpkgsSource::Registry);
+        assert!(expr.starts_with("(builtins.getFlake \"nixpkgs\")"));
+        assert!(requires_impure(&NixpkgsSource::Registry));
 
         let expr = nixpkgs_import_expr(&NixpkgsSource::ExplicitPin {
             flake_ref: "github:NixOS/nixpkgs/nixos-24.11".to_string(),
@@ -1359,7 +1206,7 @@ mod tests {
     #[test]
     fn test_resolve_nixpkgs_use_missing_lockfile_falls_back() {
         let dir = tempfile::tempdir().unwrap();
-        // use = "devenv" but no devenv.lock exists — should fall back to auto-resolve
+        // use = "devenv" but no devenv.lock exists — falls back to the registry
         let config = UvNixConfig {
             use_source: Some(UseSource::Devenv),
             ..Default::default()
@@ -1367,9 +1214,10 @@ mod tests {
 
         let source = resolve_nixpkgs(dir.path(), &config);
         match source {
-            NixpkgsSource::AutoResolved { .. } => {} // expected
-            other => panic!("Expected AutoResolved fallback, got {other:?}"),
+            NixpkgsSource::Registry => {}
+            other => panic!("Expected Registry fallback, got {other:?}"),
         }
+        assert!(!dir.path().join("flake.nix").exists());
     }
 
     #[test]

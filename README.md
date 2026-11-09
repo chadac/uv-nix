@@ -176,13 +176,9 @@ it auto-detects from your project's lock files in this order:
 3. `.flox/env/manifest.lock` — Flox manifest lock
 
 If none of these are found and `UV_NIX_NIXPKGS` is set, uv-nix uses that
-flake ref (e.g. `nixpkgs`, to follow your flake registry) and writes nothing
-to your project. This suits machines that already carry a pinned nixpkgs.
-
-Otherwise, uv-nix generates a minimal `flake.nix`
-and `flake.lock` in your project to pin `nixpkgs-unstable`. This
-ensures reproducible builds — you can update the pin later with
-`nix flake update`.
+flake ref. Otherwise it uses `nixpkgs` from your flake registry
+(`nix registry list`). Either way it writes nothing to your project. To pin a
+revision, set `[tool.uv-nix].nixpkgs` or add a lock file.
 
 You can check which nixpkgs source is being used with `uv nix info`.
 
