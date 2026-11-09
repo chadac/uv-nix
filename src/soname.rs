@@ -631,8 +631,7 @@ pub fn plan_patches(
 /// 3. Lists .so/.dylib files in each store path's `lib/` dir
 /// 4. Maps soname filename → attr
 ///
-/// Requires a nixpkgs source for resolution. Uses the project's flake.lock
-/// or auto-resolves.
+/// Requires a nixpkgs source for resolution.
 pub fn generate_soname_map_for_platform(
     source: &crate::nixpkgs::NixpkgsSource,
     is_darwin: bool,

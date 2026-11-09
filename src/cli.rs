@@ -635,9 +635,10 @@ fn resolve_nixpkgs_info(start: &Path) -> Option<NixpkgsInfo> {
         nixpkgs::NixpkgsSource::FloxLock { rev } => {
             (".flox/env/manifest.lock".to_string(), rev.clone())
         }
-        nixpkgs::NixpkgsSource::AutoResolved { rev } => {
-            ("auto-resolved (nixpkgs-unstable)".to_string(), rev.clone())
-        }
+        nixpkgs::NixpkgsSource::Registry => (
+            "flake registry".to_string(),
+            nixpkgs::REGISTRY_FLAKE_REF.to_string(),
+        ),
     };
 
     Some(NixpkgsInfo {
