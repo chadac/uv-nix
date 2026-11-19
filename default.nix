@@ -68,6 +68,9 @@ else pkgs.stdenv.mkDerivation {
   installPhase = ''
     runHook preInstall
     install -Dm755 $src $out/bin/uv
+    # The release asset is uv alone; uvx is uv's `tool uvx` entry point.
+    printf '#!%s\nexec %s tool uvx "$@"\n' ${pkgs.runtimeShell} "$out/bin/uv" > $out/bin/uvx
+    chmod 755 $out/bin/uvx
     runHook postInstall
   '';
 
